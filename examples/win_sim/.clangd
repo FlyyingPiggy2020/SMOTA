@@ -1,0 +1,4 @@
+CompileFlags:
+  Compiler: C:/Users/w1545/scoop/apps/gcc/current/bin/gcc.exe
+  Add:
+    - -IC:/Users/w1545/scoop/apps/gcc/13.2.0/x86_64-w64-mingw32/include

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ninja:*)",
+      "mcp__zread__get_repo_structure"
+    ]
+  }
+}
