@@ -72,6 +72,7 @@ int main(void) {
 | [doc/2.config-reference.md](doc/2.config-reference.md) | 配置宏参考 |
 | [doc/3.key-management.md](doc/3.key-management.md) | 密钥管理方案 |
 | [doc/4.ota-protocol.md](doc/4.ota-protocol.md) | OTA 协议规范 |
+| [doc/5.future-optimizations.md](doc/5.future-optimizations.md) | 待优化方案（差分/压缩） |
 
 ## 示例
 

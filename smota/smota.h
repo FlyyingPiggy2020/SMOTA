@@ -4,11 +4,7 @@
  *
  * @details 使用说明：
  *          1. 将 smota/ 文件夹复制到你的项目
- *          2. 将以下目录添加到编译器的头文件搜索路径：
- *             - smota
- *             - smota/smota_core/inc
- *             - smota/smota_hal/inc
- *             - smota/smota_crypto/inc (如果启用加密功能)
+ *          2. 将 smota 加入头文件搜索路径：
  *          3. 根据你的平台，将对应源文件添加到编译：
  *             - smota/smota_core/src/*.c
  *             - smota/smota_hal/ports/xxx/*.c (选择一个平台)
@@ -37,29 +33,31 @@ extern "C" {
 /*==============================================================================
  * 1. 配置文件（必须首先包含）
  *============================================================================*/
-#include "smota_config.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include "smota_core/inc/smota_config.h"
 
 /*==============================================================================
  * 2. 核心库（平台无关）
  *============================================================================*/
-#include "smota_types.h"
-#include "smota_state.h"
-#include "smota_packet.h"
-#include "smota_verify.h"
-#include "smota_hal.h"
+#include "smota_core/inc/smota_types.h"
+#include "smota_core/inc/smota_state.h"
+#include "smota_core/inc/smota_packet.h"
+#include "smota_core/inc/smota_verify.h"
+#include "smota_core/inc/smota_hal.h"
 
 /*==============================================================================
  * 3. 加密模块（根据配置条件包含）
  *============================================================================*/
 #if SMOTA_RELIABILITY_CONTENT || SMOTA_RELIABILITY_SOURCE || SMOTA_RELIABILITY_TRANSMISSION
-    #include "smota_crypto.h"
+#include "smota_crypto.h"
 #endif
 
 /*==============================================================================
  * 4. Bootloader（仅 Bootloader 项目需要）
  *============================================================================*/
 #ifdef SMOTA_BOOTLOADER_BUILD
-    #include "bootloader.h"
+#include "bootloader.h"
 #endif
 
 /*==============================================================================

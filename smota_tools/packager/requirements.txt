@@ -1,0 +1,13 @@
+# smOTA 固件打包工具依赖
+
+# __file_name: requirements.txt
+# __author: lxf
+# __date: 2026-01-29 09:39:06
+# __last_edit_by: lxf_zjnb@qq.com
+# __brief: smOTA 固件打包工具 Python 依赖列表
+
+# 加密库（用于签名和哈希计算）
+cryptography>=41.0.0
+
+# 命令行参数解析（Python 3.7+ 内置 argparse，无需额外安装）
+# argparse - 内置

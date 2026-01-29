@@ -3,6 +3,9 @@
     "allow": [
       "Bash(ninja:*)",
       "mcp__zread__get_repo_structure"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\w1545\\Desktop\\Project\\SMOTA\\smota\\smota_hal"
     ]
   }
 }
