@@ -6,20 +6,12 @@
  *          1. 将 smota/ 文件夹复制到你的项目
  *          2. 将 smota 加入头文件搜索路径：
  *          3. 根据你的平台，将对应源文件添加到编译：
- *             - smota/smota_core/src/*.c
- *             - smota/smota_hal/ports/xxx/*.c (选择一个平台)
- *             - smota/smota_crypto/src/*.c (启用加密功能时)
  *          4. 在你的代码中 #include "smota.h"
  *
  * @example 最小集成示例：
  *          @code
  *          #include "smota.h"
  *
- *          int main(void) {
- *              OTA_Init(&my_hal, work_buf, sizeof(work_buf));
- *              OTA_DownloadStart(&header);
- *              // ...
- *          }
  *          @endcode
  */
 
@@ -40,112 +32,93 @@ extern "C" {
 /*==============================================================================
  * 2. 核心库（平台无关）
  *============================================================================*/
+#include "smota_hal/smota_hal.h"
+
+/*==============================================================================
+ * 3. 核心模块头文件
+ *============================================================================*/
 #include "smota_core/inc/smota_types.h"
 #include "smota_core/inc/smota_state.h"
 #include "smota_core/inc/smota_packet.h"
 #include "smota_core/inc/smota_verify.h"
-#include "smota_core/inc/smota_hal.h"
+#include "smota_core/inc/smota_flash.h"
 
 /*==============================================================================
- * 3. 加密模块（根据配置条件包含）
+ * 4. 加密模块（根据配置条件包含）
  *============================================================================*/
 #if SMOTA_RELIABILITY_CONTENT || SMOTA_RELIABILITY_SOURCE || SMOTA_RELIABILITY_TRANSMISSION
 #include "smota_crypto.h"
 #endif
 
 /*==============================================================================
- * 4. Bootloader（仅 Bootloader 项目需要）
+ * 5. Bootloader（仅 Bootloader 项目需要）
  *============================================================================*/
 #ifdef SMOTA_BOOTLOADER_BUILD
 #include "bootloader.h"
 #endif
 
 /*==============================================================================
- * 5. 公共 API 声明
+ * 6. 公共 API 声明
  *============================================================================*/
 
 /**
- * @brief 初始化 smOTA 库
- * @param hal       HAL 接口函数表
- * @param work_buf  工作缓冲区（至少 2KB）
- * @param buf_size  缓冲区大小
- * @return          0=成功, 负值=错误码
+ * @brief       初始化 OTA 模块
+ * @return      smota_err_t 错误码
  */
-int OTA_Init(const OTA_Hardware_Interface_t *hal,
-             uint8_t *work_buf,
-             uint32_t buf_size);
+smota_err_t smota_init(void);
 
 /**
- * @brief 去初始化 smOTA 库
+ * @brief       去初始化 OTA 模块
  */
-void OTA_Deinit(void);
+void smota_deinit(void);
 
 /**
- * @brief 开始下载新固件
- * @param header  固件包头部信息（已预解析）
- * @return        0=成功, 负值=错误码
+ * @brief       OTA 主轮询函数
+ * @note        需要在主循环中周期性调用，建议每1ms调用一次
  */
-int OTA_DownloadStart(const OTA_PackageHeader_t *header);
+void smota_poll(void);
 
 /**
- * @brief 写入下载的数据包
- * @param data    数据包内容
- * @param offset  在固件包中的偏移
- * @param len     数据长度
- * @param crc     数据包 CRC-16
- * @return        已处理的字节数，负值=错误码
+ * @brief       启动 OTA 升级（主动触发）
+ * @return      smota_err_t 错误码
  */
-int OTA_DownloadWrite(const uint8_t *data, uint32_t offset, uint32_t len, uint16_t crc);
+smota_err_t smota_start(void);
 
 /**
- * @brief 完成下载，开始验签
- * @return  0=成功, 负值=错误码
+ * @brief       中止当前 OTA 升级
+ * @return      smota_err_t 错误码
  */
-int OTA_DownloadFinish(void);
+smota_err_t smota_abort(void);
 
 /**
- * @brief 获取当前 OTA 状态
- * @return  当前状态
+ * @brief       获取 OTA 升级进度
+ * @return      uint8_t 进度百分比 (0-100)
  */
-OTA_State_t OTA_GetState(void);
+uint8_t smota_get_progress(void);
 
 /**
- * @brief 获取升级进度 (0-100)
- * @return  进度百分比
+ * @brief       获取当前 OTA 状态
+ * @return      smota_state_t 当前状态
  */
-uint8_t OTA_GetProgress(void);
+smota_state_t smota_get_state(void);
 
 /**
- * @brief 获取当前运行的固件版本
- * @param version  输出版本信息
+ * @brief       获取最近一次错误码
+ * @return      smota_err_t 错误码
  */
-void OTA_GetCurrentVersion(FirmwareVersion_t *version);
+smota_err_t smota_get_error(void);
 
 /**
- * @brief 获取新固件版本
- * @param version  输出版本信息
+ * @brief       获取错误码对应的字符串描述
+ * @return      const char* 错误描述字符串
  */
-void OTA_GetNewVersion(FirmwareVersion_t *version);
+const char *smota_get_error_string(void);
 
 /**
- * @brief 激活新固件（设置标志位并重启）
- * @note   此函数不会返回（系统复位）
+ * @brief       检查 OTA 是否正在运行中
+ * @return      bool true=运行中, false=空闲
  */
-void OTA_Activate(void) __attribute__((noreturn));
-
-/**
- * @brief 手动触发回滚到旧版本
- * @return  0=成功, 负值=错误码
- */
-int OTA_Rollback(void);
-
-/**
- * @brief 设置事件回调
- * @param callback  回调函数指针
- */
-typedef void (*OTA_EventCallback_t)(OTA_Event_t event, void *data);
-
-void OTA_SetCallback(OTA_EventCallback_t callback);
+bool smota_is_running(void);
 
 #ifdef __cplusplus
 }

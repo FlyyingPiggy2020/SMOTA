@@ -1,0 +1,14 @@
+[
+{
+  "directory": "C:/Users/w1545/Desktop/Project/SMOTA/examples/win_sim/build",
+  "command": "C:\\Users\\w1545\\scoop\\apps\\gcc\\current\\bin\\gcc.exe -DSMOTA_USER_CONFIG_FILE=\\\"smota_user_config.h\\\" -IC:/Users/w1545/Desktop/Project/SMOTA/examples/win_sim -IC:/Users/w1545/Desktop/Project/SMOTA/examples/win_sim/../../smota -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -o CMakeFiles\\win_sim.dir\\main.c.obj -c C:\\Users\\w1545\\Desktop\\Project\\SMOTA\\examples\\win_sim\\main.c",
+  "file": "C:/Users/w1545/Desktop/Project/SMOTA/examples/win_sim/main.c",
+  "output": "C:/Users/w1545/Desktop/Project/SMOTA/examples/win_sim/build/CMakeFiles/win_sim.dir/main.c.obj"
+},
+{
+  "directory": "C:/Users/w1545/Desktop/Project/SMOTA/examples/win_sim/build",
+  "command": "C:\\Users\\w1545\\scoop\\apps\\gcc\\current\\bin\\gcc.exe -DSMOTA_USER_CONFIG_FILE=\\\"smota_user_config.h\\\" -IC:/Users/w1545/Desktop/Project/SMOTA/examples/win_sim -IC:/Users/w1545/Desktop/Project/SMOTA/examples/win_sim/../../smota -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -o CMakeFiles\\win_sim.dir\\C_\\Users\\w1545\\Desktop\\Project\\SMOTA\\smota\\smota_hal\\smota_hal.c.obj -c C:\\Users\\w1545\\Desktop\\Project\\SMOTA\\smota\\smota_hal\\smota_hal.c",
+  "file": "C:/Users/w1545/Desktop/Project/SMOTA/smota/smota_hal/smota_hal.c",
+  "output": "C:/Users/w1545/Desktop/Project/SMOTA/examples/win_sim/build/CMakeFiles/win_sim.dir/C_/Users/w1545/Desktop/Project/SMOTA/smota/smota_hal/smota_hal.c.obj"
+}
+]

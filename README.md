@@ -52,16 +52,6 @@ YourProject/
 
 ### 3. 调用 API
 
-```c
-#include "smota.h"
-
-int main(void) {
-    // 初始化
-    OTA_Init(&my_hal, work_buf, sizeof(work_buf));
-
-    // 使用 OTA 功能...
-}
-```
 
 ## 文档
 

@@ -2,7 +2,17 @@
   "permissions": {
     "allow": [
       "Bash(ninja:*)",
-      "mcp__zread__get_repo_structure"
+      "mcp__zread__get_repo_structure",
+      "Bash(claude mcp add:*)",
+      "Read(//c/Users/w1545/**)",
+      "mcp__MiniMax__web_search",
+      "mcp__web-search-prime__webSearchPrime",
+      "mcp__web-reader__webReader",
+      "Bash(bash:*)",
+      "Bash(scoop search:*)",
+      "Bash(scoop install:*)",
+      "Bash(scoop list:*)",
+      "Bash(./win_sim.exe -t)"
     ],
     "additionalDirectories": [
       "c:\\Users\\w1545\\Desktop\\Project\\SMOTA\\smota\\smota_hal"

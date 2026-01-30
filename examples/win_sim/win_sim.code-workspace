@@ -5,16 +5,11 @@
 		}
 	],
 	"settings": {
-		"C_Cpp.intelliSenseEngine": "disabled",
-		"clangd.path": "clangd",
+		"clangd.onConfigChanged": "restart",
 		"clangd.arguments": [
-			"--background-index",
 			"--clang-tidy",
-			"--header-insertion=iwyu",
-			"--completion-style=detailed",
-			"--function-arg-placeholders",
-			"--fallback-style=llvm",
-			"--compile-commands-dir=${workspaceFolder}/build"
+			"--log=verbose", // 建议开启，方便在 Output 窗口看报错
+			"--header-insertion=never", // 建议开启，防止自动插入头文件有时候乱插
 		]
 	}
 }

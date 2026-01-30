@@ -13,10 +13,6 @@
  *          // 编译选项中添加
  *          -DSMOTA_USER_CONFIG_FILE=\"my_smota_config.h\"
  *
- * @example 通过编译选项直接覆盖：
- *          // 编译选项中添加
- *          -DSMOTA_MODE_DUAL_BANK=1
- *          -DSMOTA_RELIABILITY_SOURCE=1
  */
 
 #ifndef SMOTA_CONFIG_H
@@ -150,29 +146,12 @@ extern "C" {
 /*==============================================================================
  * 5. 固件包配置
  *============================================================================*/
-
 /**
- * @brief 最大数据包大小
- * @note   受限于可用 RAM 大小和传输协议 MTU
+ * @brief 物理层最大MTU
+ * @note   设备物理支持的传输单元最大值
  */
-#ifndef SMOTA_PACKET_MAX_SIZE
-#define SMOTA_PACKET_MAX_SIZE 1024 // 字节
-#endif
-
-/**
- * @brief 固件包头部大小
- * @note   固定为 256 字节，包含版本、大小、哈希、签名等信息
- */
-#ifndef SMOTA_HEADER_SIZE
-#define SMOTA_HEADER_SIZE 256 // 字节
-#endif
-
-/**
- * @brief 固件包魔术字
- * @note   用于识别合法的 smOTA 固件包
- */
-#ifndef SMOTA_MAGIC_WORD
-#define SMOTA_MAGIC_WORD 0xAA55AA55
+#ifndef SMOTA_MAX_MTU_SIZE
+#define SMOTA_MAX_MTU_SIZE 2048 // 字节
 #endif
 
 /*==============================================================================

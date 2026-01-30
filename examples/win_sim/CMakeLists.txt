@@ -22,25 +22,50 @@ endif()
 # smOTA 头文件路径
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/port
     ${CMAKE_CURRENT_SOURCE_DIR}/../../smota
     ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_hal
+)
+
+# TinyCrypt 头文件路径
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/include
 )
 
 # 用户配置文件
 add_compile_definitions(SMOTA_USER_CONFIG_FILE="smota_user_config.h")
 
-# 源文件
+# TinyCrypt 源文件
+set(TINYCRYPT_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/source/sha256.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/source/aes_encrypt.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/source/aes_decrypt.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/source/ctr_mode.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/source/hmac.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/source/ctr_prng.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/source/ecc.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/source/ecc_dsa.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/source/ecc_platform_specific.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/third_party/tinycrypt/lib/source/utils.c
+)
+
+# smOTA core 源文件
 set(SMOTA_CORE_SOURCES
-    # 注意：当 smota_core 实现完成后，取消以下注释
-    # ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_core.c
-    # ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_state.c
-    # ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_packet.c
-    # ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_verify.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_hal/smota_hal.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_types.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_state.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_packet.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_verify.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_handler.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_core.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../smota/smota_core/src/smota_flash.c
 )
 
 set(WIN_SIM_SOURCES
     main.c
+    port/smota_port.c
 )
 
 # 创建可执行文件
-add_executable(win_sim ${WIN_SIM_SOURCES} ${SMOTA_CORE_SOURCES})
+add_executable(win_sim ${WIN_SIM_SOURCES} ${SMOTA_CORE_SOURCES} ${TINYCRYPT_SOURCES})
