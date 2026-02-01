@@ -62,6 +62,15 @@ int smota_sha256_update(struct smota_sha256_ctx *ctx, const uint8_t *data, uint3
 int smota_sha256_final(struct smota_sha256_ctx *ctx, uint8_t hash[32]);
 
 /**
+ * @brief       快速计算数据的 SHA-256 哈希
+ * @param[in]   data: 待计算数据
+ * @param[in]   size: 数据长度
+ * @param[out]  hash: 输出哈希值（32字节）
+ * @return      0=成功, <0=失败
+ */
+int smota_sha256_compute(const uint8_t *data, uint32_t size, uint8_t hash[32]);
+
+/**
  * @brief       验证版本号（防回滚）
  * @param[in]   current_version: 当前版本号[major, minor, patch]
  * @param[in]   new_version: 新版本号[major, minor, patch]

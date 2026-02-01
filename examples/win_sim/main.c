@@ -13,6 +13,13 @@
 #include <stdbool.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/time.h>
+#include <unistd.h>
+#endif
+
 #include "smota.h"
 #include "port/smota_port.h"
 
