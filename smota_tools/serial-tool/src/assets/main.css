@@ -1,1 +1,32 @@
 @import "tailwindcss";
+
+
+:root {
+    /* 保持默认字体 */
+    font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+}
+
+html,
+body,
+#app {
+    /* 铺满整个系统窗口，不留白边 */
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+
+    /* 桌面软件特有：禁止滚动窗口本身，让内部组件自己滚 */
+    overflow: hidden;
+
+    /* 增加原生感 */
+    user-select: none;
+    cursor: default;
+}
+
+/* 允许输入框操作 */
+input,
+textarea,
+[contenteditable="true"] {
+    user-select: text;
+    cursor: auto;
+}
