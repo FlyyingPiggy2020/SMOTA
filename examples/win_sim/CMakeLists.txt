@@ -69,3 +69,8 @@ set(WIN_SIM_SOURCES
 
 # 创建可执行文件
 add_executable(win_sim ${WIN_SIM_SOURCES} ${SMOTA_CORE_SOURCES} ${TINYCRYPT_SOURCES})
+
+# Windows 下链接 Winsock 库（MSVC 和 MinGW 都需要）
+if(WIN32)
+    target_link_libraries(win_sim PRIVATE ws2_32)
+endif()

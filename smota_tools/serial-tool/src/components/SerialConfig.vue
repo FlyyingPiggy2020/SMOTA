@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { useSerialStore } from '../stores/serialStore'
+
+const store = useSerialStore()
 
 // 端口选项（动态加载）
 const portOptions = ref<Array<{ label: string; value: string }>>([])
 const loading = ref(false)
-const baudRateValue = ref<number>(115200)
+
+// 连接中状态（本地使用，不持久化）
+const connecting = ref(false)
+
+// 使用计算属性从 store 获取真实连接状态
+const isConnected = computed(() => store.isConnected)
 
 // 刷新端口列表
 const refreshPorts = async () => {
@@ -23,8 +31,43 @@ const refreshPorts = async () => {
     }
 }
 
-onMounted(() => {
+// 打开/关闭串口
+const toggleConnection = async () => {
+    if (store.isConnected) {
+        // 关闭串口
+        try {
+            await invoke('close_serial')
+            await store.checkConnection()
+        } catch (error) {
+            console.error('关闭串口失败:', error)
+        }
+    } else {
+        // 打开串口
+        if (!store.port) {
+            console.error('请选择串口')
+            return
+        }
+        connecting.value = true
+        try {
+            await invoke('open_serial', {
+                port: store.port,
+                baudRate: store.baudRate,
+                dataBits: store.dataBits,
+                stopBits: store.stopBits,
+                parity: store.parity
+            })
+            await store.checkConnection()
+        } catch (error) {
+            console.error('打开串口失败:', error)
+        } finally {
+            connecting.value = false
+        }
+    }
+}
+
+onMounted(async () => {
     refreshPorts()
+    await store.checkConnection()
 })
 
 // 波特率选项（常用值）
@@ -55,7 +98,7 @@ const inputRef = ref<HTMLInputElement | null>(null)
 
 // 双击切换自定义输入模式
 const onBaudRateDoubleClick = () => {
-    customBaudRate.value = baudRateValue.value
+    customBaudRate.value = store.baudRate
     showCustomInput.value = true
     // 下次渲染后聚焦输入框
     setTimeout(() => {
@@ -67,7 +110,7 @@ const onBaudRateDoubleClick = () => {
 const onCustomBaudRateConfirm = () => {
     const num = customBaudRate.value
     if (!isNaN(num) && num > 0) {
-        baudRateValue.value = num
+        store.baudRate = num
     }
     showCustomInput.value = false
 }
@@ -82,8 +125,6 @@ const onCustomBaudRateKeydown = (e: KeyboardEvent) => {
 }
 
 const dataBitsOptions = [
-    { label: '5', value: 5 },
-    { label: '6', value: 6 },
     { label: '7', value: 7 },
     { label: '8', value: 8 },
 ];
@@ -107,25 +148,26 @@ const parityOptions = [
             <div class="flex justify-between items-center mb-4">
                 <!-- 状态标签 -->
                 <div class="text-sm">
-                    <span class="text-green-500">●</span> 已连接
+                    <span :class="isConnected ? 'text-green-500' : 'text-gray-500'">●</span>
+                    {{ isConnected ? '已连接' : '未连接' }}
                 </div>
                 <!-- 刷新端口按钮 -->
                 <NButton size="small" :loading="loading" @click="refreshPorts">刷新端口</NButton>
             </div>
             <!-- 打开/断开按钮 -->
-            <NButton type="primary" block class="mb-4!">
-                打开串口
+            <NButton type="primary" block class="mb-4!" :loading="connecting" @click="toggleConnection">
+                {{ isConnected ? '关闭串口' : '打开串口' }}
             </NButton>
 
-            <!-- 卡片1: 串口参数配置 (可折叠) -->
+            <!-- 卡片1: 串口参数配置 -->
             <NCard size="small" class="mb-4">
-                <NCollapse>
+                <NCollapse v-model:expanded-names="store.expandedNames">
                     <NCollapseItem title="串口参数配置" name="serial-config">
                         <NGrid :cols="1" :x-gap="4" :y-gap="6">
                             <!-- 端口号 -->
                             <NGi>
                                 <label class="block text-sm mb-1">端口号</label>
-                                <NSelect placeholder="选择端口" :options="portOptions" />
+                                <NSelect v-model:value="store.port" placeholder="选择端口" :options="portOptions" />
                             </NGi>
 
                             <!-- 波特率 -->
@@ -145,8 +187,8 @@ const parityOptions = [
                                 <NSelect
                                     v-else
                                     :options="baudRateOptions"
-                                    :value="baudRateValue"
-                                    @update:value="(val: number) => baudRateValue = val"
+                                    :value="store.baudRate"
+                                    @update:value="(val: number) => store.baudRate = val"
                                     @dblclick="onBaudRateDoubleClick"
                                 />
                             </NGi>
@@ -154,28 +196,28 @@ const parityOptions = [
                             <!-- 数据位 -->
                             <NGi>
                                 <label class="block text-sm mb-1">数据位</label>
-                                <NSelect :options="dataBitsOptions" />
+                                <NSelect v-model:value="store.dataBits" :options="dataBitsOptions" />
                             </NGi>
 
                             <!-- 停止位 -->
                             <NGi>
                                 <label class="block text-sm mb-1">停止位</label>
-                                <NSelect :options="stopBitsOptions" />
+                                <NSelect v-model:value="store.stopBits" :options="stopBitsOptions" />
                             </NGi>
 
                             <!-- 校验位 -->
                             <NGi>
                                 <label class="block text-sm mb-1">校验位</label>
-                                <NSelect :options="parityOptions" />
+                                <NSelect v-model:value="store.parity" :options="parityOptions" />
                             </NGi>
                         </NGrid>
                     </NCollapseItem>
                 </NCollapse>
             </NCard>
 
-            <!-- 卡片2: 流控信号控制 (可折叠) -->
+            <!-- 卡片2: 流控信号控制 -->
             <NCard size="small">
-                <NCollapse>
+                <NCollapse v-model:expanded-names="store.flowExpandedNames">
                     <NCollapseItem title="流控信号控制" name="flow-control">
                         <NGrid :cols="3" :x-gap="16">
                             <!-- DTR -->
@@ -208,6 +250,7 @@ const parityOptions = [
                     </NCollapseItem>
                 </NCollapse>
             </NCard>
+
         </div>
     </NScrollbar>
 </template>

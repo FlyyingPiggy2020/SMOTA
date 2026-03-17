@@ -15,15 +15,27 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
+#include <errno.h>
 
 #ifdef _WIN32
 #include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <io.h>
+#include <fcntl.h>
+#pragma comment(lib, "ws2_32.lib")
 #else
 #include <sys/time.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netinet/tcp.h>
 #endif
 
 #include "smota_user_config.h"
+#include "smota.h"
 
 /* TinyCrypt 加密库头文件 */
 #include <tinycrypt/sha256.h>
@@ -39,6 +51,7 @@
  * @brief  Flash 模拟文件路径
  */
 #define SMOTA_PORT_FLASH_FILE "flash_sim.bin"
+#define SMOTA_PORT_STATE_FILE "device_state.bin"
 
 /*---------- type define ----------*/
 
@@ -56,7 +69,17 @@ struct smota_port_flash_ctx {
  * @brief  通信模拟器上下文
  */
 struct smota_port_comm_ctx {
-    int is_init; /* 是否已初始化 */
+    int is_init;     /* 是否已初始化 */
+    intptr_t server_fd;   /* 服务端 socket */
+    intptr_t client_fd;   /* 客户端连接 socket */
+    int is_server;   /* 1=服务端模式, 0=客户端模式 */
+};
+
+/**
+ * @brief  运行时状态持久化结构
+ */
+struct smota_port_runtime_state {
+    uint8_t version[4];
 };
 
 /**
@@ -78,8 +101,13 @@ struct tc_aes_ctx {
 
 static struct smota_port_flash_ctx g_flash_ctx = {0};
 static struct smota_port_comm_ctx  g_comm_ctx = {0};
+static struct smota_port_runtime_state g_runtime_state = {{1, 0, 0, 0}};
+static int g_runtime_state_loaded = 0;
 
 /*---------- function prototype ----------*/
+static void runtime_state_set_default(void);
+static void runtime_state_load(void);
+static void runtime_state_save(void);
 
 /*---------- TinyCrypt SHA-256 驱动函数 (端口封装) ----------*/
 void *tc_port_sha256_init(void);
@@ -101,6 +129,85 @@ int smota_kdf_derive(const uint8_t *master_key,
                      const uint8_t *uid, uint32_t uid_len,
                      const char *context,
                      uint8_t output[32]);
+
+/*---------- 通信驱动内部函数 ----------*/
+static int comm_poll_and_read(uint8_t *data, uint32_t size);
+
+/**
+ * @brief  设置默认运行版本
+ */
+static void runtime_state_set_default(void)
+{
+    memset(&g_runtime_state, 0, sizeof(g_runtime_state));
+    g_runtime_state.version[0] = 1;
+    g_runtime_state.version[1] = 0;
+    g_runtime_state.version[2] = 0;
+}
+
+/**
+ * @brief  加载模拟器运行状态
+ */
+static void runtime_state_load(void)
+{
+    FILE *fp;
+
+    if (g_runtime_state_loaded != 0) {
+        return;
+    }
+
+    runtime_state_set_default();
+
+    fp = fopen(SMOTA_PORT_STATE_FILE, "rb");
+    if (fp != NULL) {
+        if (fread(&g_runtime_state, sizeof(g_runtime_state), 1, fp) != 1) {
+            runtime_state_set_default();
+        }
+        fclose(fp);
+    }
+
+    g_runtime_state_loaded = 1;
+}
+
+/**
+ * @brief  保存模拟器运行状态
+ */
+static void runtime_state_save(void)
+{
+    FILE *fp;
+
+    if (g_runtime_state_loaded == 0) {
+        runtime_state_load();
+    }
+
+    fp = fopen(SMOTA_PORT_STATE_FILE, "wb");
+    if (fp != NULL) {
+        fwrite(&g_runtime_state, sizeof(g_runtime_state), 1, fp);
+        fclose(fp);
+    }
+}
+
+/**
+ * @brief  读取当前运行版本
+ */
+void smota_port_load_running_version(uint8_t version[4])
+{
+    if (version == NULL) {
+        return;
+    }
+
+    runtime_state_load();
+    memcpy(version, g_runtime_state.version, sizeof(g_runtime_state.version));
+}
+
+/**
+ * @brief  重置模拟器运行状态
+ */
+void smota_port_reset_runtime_state(void)
+{
+    runtime_state_set_default();
+    g_runtime_state_loaded = 1;
+    runtime_state_save();
+}
 
 /*---------- Flash 驱动实现 ----------*/
 
@@ -245,7 +352,28 @@ int flash_unlock(void)
 /*---------- 通信驱动实现 ----------*/
 
 /**
- * @brief  通信初始化
+ * @brief  socket 相关宏定义
+ */
+#ifdef _WIN32
+#define SOCKET_INVALID    INVALID_SOCKET
+#define SOCKET_ERROR_VAL  SOCKET_ERROR
+typedef SOCKET socket_t;
+#define CLOSE_SOCKET      closesocket
+#else
+#define SOCKET_INVALID    -1
+#define SOCKET_ERROR_VAL  -1
+typedef int socket_t;
+#define CLOSE_SOCKET      close
+#endif
+
+/**
+ * @brief  TCP 服务端配置
+ */
+#define SMOTA_TCP_PORT    8888
+#define SMOTA_TCP_BACKLOG 1
+
+/**
+ * @brief  通信初始化（TCP 服务端模式）
  */
 int comm_init(void)
 {
@@ -253,8 +381,67 @@ int comm_init(void)
         return 0;
     }
 
+#ifdef _WIN32
+    /* Windows 需要初始化 Winsock */
+    WSADATA wsa_data;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
+        SMOTA_DEBUG_PRINTF("Error: WSAStartup failed\r\n");
+        return -1;
+    }
+#endif
+
+    /* 创建 socket */
+    g_comm_ctx.server_fd = (intptr_t)socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if ((socket_t)g_comm_ctx.server_fd == SOCKET_INVALID) {
+        SMOTA_DEBUG_PRINTF("Error: socket create failed\r\n");
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return -1;
+    }
+
+    /* 设置地址复用 */
+    int opt = 1;
+#ifdef _WIN32
+    setsockopt((socket_t)g_comm_ctx.server_fd, SOL_SOCKET, SO_REUSEADDR,
+               (const char *)&opt, sizeof(opt));
+#else
+    setsockopt(g_comm_ctx.server_fd, SOL_SOCKET, SO_REUSEADDR,
+               &opt, sizeof(opt));
+#endif
+
+    /* 绑定端口 */
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(SMOTA_TCP_PORT);
+
+    if (bind((socket_t)g_comm_ctx.server_fd, (struct sockaddr *)&addr,
+             sizeof(addr)) == SOCKET_ERROR_VAL) {
+        SMOTA_DEBUG_PRINTF("Error: bind failed on port %d\r\n", SMOTA_TCP_PORT);
+        CLOSE_SOCKET((socket_t)g_comm_ctx.server_fd);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return -1;
+    }
+
+    /* 监听 */
+    if (listen((socket_t)g_comm_ctx.server_fd, SMOTA_TCP_BACKLOG) == SOCKET_ERROR_VAL) {
+        SMOTA_DEBUG_PRINTF("Error: listen failed\r\n");
+        CLOSE_SOCKET((socket_t)g_comm_ctx.server_fd);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return -1;
+    }
+
+    g_comm_ctx.client_fd = -1;
+    g_comm_ctx.is_server = 1;
     g_comm_ctx.is_init = 1;
-    SMOTA_DEBUG_PRINTF("Comm driver initialized (stdio simulation)\r\n");
+
+    SMOTA_DEBUG_PRINTF("Comm driver listening on TCP port %d\r\n", SMOTA_TCP_PORT);
     return 0;
 }
 
@@ -263,12 +450,30 @@ int comm_init(void)
  */
 int comm_deinit(void)
 {
+    if (!g_comm_ctx.is_init) {
+        return 0;
+    }
+
+    if (g_comm_ctx.client_fd >= 0) {
+        CLOSE_SOCKET((socket_t)g_comm_ctx.client_fd);
+        g_comm_ctx.client_fd = -1;
+    }
+
+    if (g_comm_ctx.server_fd >= 0) {
+        CLOSE_SOCKET((socket_t)g_comm_ctx.server_fd);
+        g_comm_ctx.server_fd = -1;
+    }
+
+#ifdef _WIN32
+    WSACleanup();
+#endif
+
     g_comm_ctx.is_init = 0;
     return 0;
 }
 
 /**
- * @brief  发送数据（模拟：打印到 stdout）
+ * @brief  发送数据（TCP）
  */
 int comm_send(const uint8_t *data, uint32_t size)
 {
@@ -276,13 +481,125 @@ int comm_send(const uint8_t *data, uint32_t size)
         return -1;
     }
 
-    fwrite(data, 1, size, stdout);
-    fflush(stdout);
-    return (int)size;
+    if (g_comm_ctx.client_fd < 0) {
+        return 0;  /* 无连接 */
+    }
+
+#ifdef _WIN32
+    int sent = send((socket_t)g_comm_ctx.client_fd, (const char *)data, (int)size, 0);
+#else
+    int sent = send(g_comm_ctx.client_fd, data, size, 0);
+#endif
+
+    if (sent == SOCKET_ERROR_VAL) {
+        /* 连接断开 */
+        CLOSE_SOCKET((socket_t)g_comm_ctx.client_fd);
+        g_comm_ctx.client_fd = -1;
+        SMOTA_DEBUG_PRINTF("comm_send: connection closed\r\n");
+        return -1;
+    }
+
+    return sent;
+}
+
+/**
+ * @brief  非阻塞检查并接受连接
+ */
+static void comm_accept_if_pending(void)
+{
+    if (g_comm_ctx.client_fd >= 0) {
+        return;  /* 已有连接 */
+    }
+
+#ifdef _WIN32
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    FD_SET((socket_t)g_comm_ctx.server_fd, &read_fds);
+
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
+
+    if (select(0, &read_fds, NULL, NULL, &tv) > 0) {
+        socket_t client = accept((socket_t)g_comm_ctx.server_fd, NULL, NULL);
+        if (client != SOCKET_INVALID) {
+            g_comm_ctx.client_fd = (intptr_t)client;
+            SMOTA_DEBUG_PRINTF("comm: client connected\r\n");
+        }
+    }
+#else
+    int flags = fcntl(g_comm_ctx.server_fd, F_GETFL, 0);
+    fcntl(g_comm_ctx.server_fd, F_SETFL, flags | O_NONBLOCK);
+
+    int client = accept(g_comm_ctx.server_fd, NULL, NULL);
+    if (client >= 0) {
+        g_comm_ctx.client_fd = client;
+        SMOTA_DEBUG_PRINTF("comm: client connected\r\n");
+    }
+
+    fcntl(g_comm_ctx.server_fd, F_SETFL, flags);
+#endif
+}
+
+/**
+ * @brief  非阻塞轮询并读取数据
+ */
+static int comm_poll_and_read(uint8_t *data, uint32_t size)
+{
+    comm_accept_if_pending();
+
+    if (g_comm_ctx.client_fd < 0) {
+        return 0;  /* 无连接 */
+    }
+
+#ifdef _WIN32
+    /* 使用 select 检查是否有数据可读 */
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    FD_SET((socket_t)g_comm_ctx.client_fd, &read_fds);
+
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
+
+    if (select(0, &read_fds, NULL, NULL, &tv) <= 0) {
+        return 0;  /* 无数据 */
+    }
+
+    int recv_len = recv((socket_t)g_comm_ctx.client_fd, (char *)data, (int)size, 0);
+#else
+    int flags = fcntl(g_comm_ctx.client_fd, F_GETFL, 0);
+    fcntl(g_comm_ctx.client_fd, F_SETFL, flags | O_NONBLOCK);
+
+    int recv_len = recv(g_comm_ctx.client_fd, data, size, 0);
+
+    fcntl(g_comm_ctx.client_fd, F_SETFL, flags);
+#endif
+
+    if (recv_len == 0) {
+        /* 连接关闭 */
+        CLOSE_SOCKET((socket_t)g_comm_ctx.client_fd);
+        g_comm_ctx.client_fd = -1;
+        SMOTA_DEBUG_PRINTF("comm_poll_and_read: client disconnected\r\n");
+        return 0;
+    }
+
+    if (recv_len == SOCKET_ERROR_VAL) {
+#ifdef _WIN32
+        int err = WSAGetLastError();
+        if (err == WSAEWOULDBLOCK) {
+            return 0;  /* 无数据 */
+        }
+#endif
+        return 0;
+    }
+
+    return recv_len;
 }
 
 /**
  * @brief  接收数据（模拟：从 stdin 读取）
+ * @note   使用非阻塞 I/O，timeout=0 时立即返回
  */
 int comm_receive(uint8_t *data, uint32_t size, uint32_t timeout)
 {
@@ -290,11 +607,28 @@ int comm_receive(uint8_t *data, uint32_t size, uint32_t timeout)
         return -1;
     }
 
-    (void)timeout; /* 模拟器忽略超时 */
+    if (data == NULL || size == 0) {
+        return 0;
+    }
 
-    /* 从标准输入读取 */
-    size_t read_size = fread(data, 1, size, stdin);
-    return (int)read_size;
+    /* timeout=0: 非阻塞模式，立即检查并返回 */
+    /* timeout>0: 当前也使用非阻塞（TODO: 可扩展为真正的超时阻塞） */
+    (void)timeout;
+
+    int ret = comm_poll_and_read(data, size);
+    if (ret > 0) {
+        /* 打印接收到的数据 */
+        SMOTA_DEBUG_PRINTF("comm_receive: %d bytes [", ret);
+        int print_len = (ret > 16) ? 16 : ret;
+        for (int i = 0; i < print_len; i++) {
+            SMOTA_DEBUG_PRINTF("%02X ", data[i]);
+        }
+        if (ret > 16) {
+            SMOTA_DEBUG_PRINTF("...");
+        }
+        SMOTA_DEBUG_PRINTF("]\r\n");
+    }
+    return ret;
 }
 
 /*---------- 系统驱动实现 ----------*/
@@ -318,6 +652,16 @@ uint64_t system_get_tick_ms(void)
  */
 void system_reset(void)
 {
+    struct smota_ctx *ctx = smota_ctx_get();
+
+    runtime_state_load();
+    if (ctx != NULL && smota_state_get() == SMOTA_STATE_INSTALL) {
+        memcpy(g_runtime_state.version,
+               ctx->firmware_version,
+               sizeof(g_runtime_state.version));
+        runtime_state_save();
+    }
+
     SMOTA_DEBUG_PRINTF("System reset requested (simulated by exit)\r\n");
     flash_deinit(); /* 保存 Flash */
     exit(0);

@@ -28,6 +28,9 @@ extern "C" {
 /* 协议版本 */
 #define SMOTA_PROTOCOL_VER             0x00
 
+/* 最大 Payload 长度 (根据实际应用场景定义，可调整) */
+#define SMOTA_MAX_PAYLOAD_LEN          4096
+
 /* 命令码定义 */
 #define SMOTA_CMD_HANDSHAKE            0x01 /* 握手请求 */
 #define SMOTA_CMD_HEADER_INFO          0x02 /* 发送固件头部信息 */
@@ -73,6 +76,40 @@ extern "C" {
 
 /*---------- type define ----------*/
 
+/**
+ * @brief  帧头固定大小
+ */
+#define SMOTA_FRAME_HEADER_SIZE  11
+
+/**
+ * @brief  固件版本结构体
+ */
+#pragma pack(push, 1)
+
+struct smota_version {
+    uint8_t major;       /* 主版本号 */
+    uint8_t minor;       /* 次版本号 */
+    uint8_t patch;       /* 补丁版本号 */
+    uint8_t reserved;    /* 保留字段 */
+};
+
+#pragma pack(pop)
+
+/**
+ * @brief  版本比较宏
+ * @return 1=v1>v2, 0=v1==v2, -1=v1<v2
+ */
+#define SMOTA_VERSION_COMPARE(v1, v2) \
+    (((v1).major > (v2).major) ? 1 : \
+     ((v1).major < (v2).major) ? -1 : \
+     ((v1).minor > (v2).minor) ? 1 : \
+     ((v1).minor < (v2).minor) ? -1 : \
+     ((v1).patch > (v2).patch) ? 1 : \
+     ((v1).patch < (v2).patch) ? -1 : 0)
+
+/* 响应命令码宏 (与现有的 #define 配合使用) */
+#define SMOTA_CMD_RESP(cmd)    ((cmd) | SMOTA_CMD_RESPONSE_FLAG)
+
 #pragma pack(push, 1)
 
 /**
@@ -83,7 +120,7 @@ struct smota_frame_header {
     uint8_t sof[5];  /* 帧起始符，固定为 "smOTA" */
     uint8_t ver;     /* 协议版本，当前为 0x00 */
     uint8_t frag;    /* 分片控制字段 (暂不支持) */
-    uint16_t seq;    /* 帧序号 0-65535，循环使用 */
+    uint8_t seq;     /* 帧序号 0-255，循环使用 */
     uint8_t cmd;     /* 命令码 */
     uint16_t length; /* Payload 长度 (小端) */
 };
@@ -148,7 +185,7 @@ struct smota_header_info_resp {
 struct smota_data_block_req {
     uint32_t offset; /* 在固件中的字节偏移 */
     uint16_t length; /* 数据长度 */
-    uint8_t data[0]; /* 可变长度数据 */
+    uint8_t data[]; /* 可变长度数据 */
 };
 
 /**
@@ -178,7 +215,7 @@ struct smota_transfer_complete_resp {
  */
 struct smota_install_req {
     uint8_t force_install; /* 强制安装标志: 0-正常安装, 1-强制执行 */
-    uint16_t reserved;     /* 预留 */
+    uint8_t reserved[15];  /* 保留字段 */
 };
 
 /**
@@ -232,10 +269,10 @@ int smota_crc16_verify(const uint8_t *frame, uint16_t len);
  * @param  data: 原始数据指针
  * @param  len: 数据长度
  * @param  frame: 输出解析后的帧结构
- * @return 0=成功, <0=失败
+ * @return smota_err_t
  * @note   解析成功后，frame->payload 指向 data 中的 payload 位置
  */
-int smota_frame_parse(const uint8_t *data, uint16_t len, struct smota_frame *frame);
+smota_err_t smota_frame_parse(const uint8_t *data, uint16_t len, struct smota_frame *frame);
 
 /**
  * @brief  构建待发送的帧
@@ -311,6 +348,15 @@ smota_err_t smota_handle_install_req(const struct smota_install_req *req,
  */
 smota_err_t smota_handle_activate_check_req(const struct smota_activate_check_req *req,
                                              struct smota_activate_check_resp *resp);
+
+/**
+ * @brief  在缓冲区中搜索下一个有效的 SOF 位置
+ * @param  data: 数据缓冲区
+ * @param  len: 缓冲区长度
+ * @return 找到的 SOF 偏移量，未找到返回 -1
+ * @note   用于在数据流中乱码时恢复帧同步
+ */
+int smota_find_sof(const uint8_t *data, uint16_t len);
 
 /*---------- end of file ----------*/
 

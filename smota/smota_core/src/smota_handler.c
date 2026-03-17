@@ -4,18 +4,19 @@
  * @Author       : lxf
  * @Date         : 2026-01-30 10:45:00
  * @LastEditors  : lxf_zjnb@qq.com
- * @LastEditTime : 2026-01-30 10:45:00
+ * @LastEditTime : 2026-03-17 14:30:00
  * @Brief        : smOTA 协议处理函数实现
  */
 
 /*---------- includes ----------*/
 #include <string.h>
 #include "../../smota.h"
-#include "smota_packet.h"
-#include "smota_state.h"
-#include "smota_config.h"
+#include "../inc/smota_packet.h"
+#include "../inc/smota_state.h"
+#include "../inc/smota_config.h"
 
 /*---------- macro ----------*/
+#define SMOTA_VERIFY_READ_CHUNK_SIZE 256U
 
 /*---------- type define ----------*/
 
@@ -24,33 +25,31 @@
 /*---------- function prototype ----------*/
 
 /*---------- variable ----------*/
-/**
- * @brief  响应缓冲区（用于发送响应帧）
- */
 static uint8_t g_resp_buffer[256];
+static void *g_resp_buffer_used __attribute__((unused)) = g_resp_buffer;
 
 /*---------- function ----------*/
 
 /**
  * @brief       处理握手请求 (0x01)
  * @param[in]   req: 握手请求结构体
- * @param[out]  resp: 握手响应结构体（需用户填充）
+ * @param[out]  resp: 握手响应结构体
  * @return      smota_err_t 错误码
  */
 smota_err_t smota_handle_handshake_req(const struct smota_handshake_req *req,
-                                        struct smota_handshake_resp *resp)
+                                       struct smota_handshake_resp *resp)
 {
     struct smota_ctx *ctx;
     const struct smota_hal *hal;
-    uint32_t free_size;
+#if SMOTA_RELIABILITY_VERSION
+    uint8_t requested_version[3];
+#endif
     int i;
 
-    /* 参数检查 */
     if (req == NULL || resp == NULL) {
         return SMOTA_ERR_INVALID_PARAM;
     }
 
-    /* 检查 HAL 是否已初始化 */
     hal = smota_hal_get();
     if (hal == NULL || hal->flash == NULL) {
         resp->error_code = SMOTA_ERR_FLASH_WRITE;
@@ -59,44 +58,49 @@ smota_err_t smota_handle_handshake_req(const struct smota_handshake_req *req,
 
     ctx = smota_ctx_get();
 
-    /* 验证项目 ID（简单比较，取较短长度） */
     for (i = 0; i < 16; i++) {
-        if (req->project_id[i] != 0) {
+        if (req->project_id[i] != 0U) {
             break;
         }
     }
-    /* TODO: 实际项目 ID 验证逻辑 */
+    (void)i;
 
-    /* 验证版本号（防回滚） */
-    /* TODO: 从设备信息获取当前版本进行比较 */
+#if SMOTA_RELIABILITY_VERSION
+    requested_version[0] = req->fw_version_major;
+    requested_version[1] = req->fw_version_minor;
+    requested_version[2] = req->fw_version_patch;
+    if (!smota_verify_version(ctx->current_version, requested_version)) {
+        resp->error_code = SMOTA_ERR_VERSION_MISMATCH;
+        return SMOTA_ERR_VERSION;
+    }
+#endif
 
-    /* 检查 Flash 空间是否足够 */
-    /* 计算可用空间（简化处理，实际应从 HAL 获取） */
-    free_size = 64 * 1024;  /* 假设可用 64KB */
-    resp->flash_free_size = free_size;
-
-    if (req->firmware_size > free_size) {
+    if (req->firmware_size > SMOTA_FLASH_SIZE) {
         resp->error_code = SMOTA_ERR_FLASH_INSUFFICIENT;
         return SMOTA_ERR_SPACE;
     }
 
-    /* 更新上下文 */
     ctx->firmware_size = req->firmware_size;
+    ctx->received_size = 0;
     ctx->firmware_version[0] = req->fw_version_major;
     ctx->firmware_version[1] = req->fw_version_minor;
     ctx->firmware_version[2] = req->fw_version_patch;
+    ctx->firmware_version[3] = 0;
     ctx->timeout_ms = req->block_timeout;
+    ctx->reset_pending = 0;
+    memset(ctx->expected_hash, 0, sizeof(ctx->expected_hash));
+    memset(ctx->signature_r, 0, sizeof(ctx->signature_r));
+    memset(ctx->signature_s, 0, sizeof(ctx->signature_s));
 
-    /* 填充响应 */
     resp->error_code = 0;
-    resp->next_offset = 0;  /* 断点续传偏移 */
-    resp->max_packet_size = 256;  /* 最大包大小 */
-    resp->mtu_size = 512;         /* MTU 大小 */
-    resp->block_timeout = req->block_timeout;  /* 确认超时 */
+    resp->next_offset = 0;
+    resp->max_packet_size = 256;
+    resp->mtu_size = 512;
+    resp->flash_free_size = SMOTA_FLASH_SIZE;
+    resp->block_timeout = req->block_timeout;
     resp->install_timeout = req->install_timeout;
-    resp->capabilities = SMOTA_CAP_ANTI_ROLLBACK;  /* 设备能力 */
+    resp->capabilities = SMOTA_CAP_ANTI_ROLLBACK;
 
-    /* 切换到握手状态 */
     smota_state_set(SMOTA_STATE_HANDSHAKE);
 
     return SMOTA_ERR_OK;
@@ -109,48 +113,40 @@ smota_err_t smota_handle_handshake_req(const struct smota_handshake_req *req,
  * @return      smota_err_t 错误码
  */
 smota_err_t smota_handle_header_info_req(const struct smota_header_info_req *req,
-                                          struct smota_header_info_resp *resp)
+                                         struct smota_header_info_resp *resp)
 {
     struct smota_ctx *ctx;
     const struct smota_hal *hal;
     int ret;
 
-    /* 参数检查 */
     if (req == NULL || resp == NULL) {
         return SMOTA_ERR_INVALID_PARAM;
     }
 
-    /* 检查状态 */
     ctx = smota_ctx_get();
     if (smota_state_get() != SMOTA_STATE_HANDSHAKE) {
         resp->error_code = SMOTA_ERR_INVALID_STATE;
         return SMOTA_ERR_INVALID_STATE;
     }
 
-    /* 检查 HAL */
     hal = smota_hal_get();
     if (hal == NULL || hal->flash == NULL || hal->crypto == NULL) {
         resp->error_code = SMOTA_ERR_FLASH_WRITE;
         return SMOTA_ERR_INVALID_STATE;
     }
 
-    /* 保存 SHA-256 哈希值 */
-    memcpy(ctx->recv_buffer, req->sha256_hash, 32);
+    memcpy(ctx->expected_hash, req->sha256_hash, sizeof(ctx->expected_hash));
+    memcpy(ctx->signature_r, req->signature_r, sizeof(ctx->signature_r));
+    memcpy(ctx->signature_s, req->signature_s, sizeof(ctx->signature_s));
+    ctx->received_size = 0;
 
-    /* 擦除 Flash 目标区域 */
     ret = hal->flash->erase(0, ctx->firmware_size);
     if (ret < 0) {
         resp->error_code = SMOTA_ERR_FLASH_WRITE;
         return SMOTA_ERR_FLASH;
     }
 
-    /* 初始化 SHA-256 上下文 */
-    ctx->recv_len = 0;
-
-    /* 填充响应 */
     resp->error_code = 0;
-
-    /* 切换到头部信息状态 */
     smota_state_set(SMOTA_STATE_HEADER_INFO);
 
     return SMOTA_ERR_OK;
@@ -159,24 +155,22 @@ smota_err_t smota_handle_header_info_req(const struct smota_header_info_req *req
 /**
  * @brief       处理数据块请求 (0x03)
  * @param[in]   req: 数据块请求结构体
- * @param[in]   data: 数据指针（指向 req 后的数据区）
+ * @param[in]   data: 数据块内容指针
  * @param[out]  resp: 数据块响应结构体
  * @return      smota_err_t 错误码
  */
 smota_err_t smota_handle_data_block_req(const struct smota_data_block_req *req,
-                                         const uint8_t *data,
-                                         struct smota_data_block_resp *resp)
+                                        const uint8_t *data,
+                                        struct smota_data_block_resp *resp)
 {
     struct smota_ctx *ctx;
     const struct smota_hal *hal;
     int ret;
 
-    /* 参数检查 */
     if (req == NULL || resp == NULL) {
         return SMOTA_ERR_INVALID_PARAM;
     }
 
-    /* 检查状态 */
     ctx = smota_ctx_get();
     if (smota_state_get() != SMOTA_STATE_HEADER_INFO &&
         smota_state_get() != SMOTA_STATE_TRANSFER) {
@@ -185,7 +179,6 @@ smota_err_t smota_handle_data_block_req(const struct smota_data_block_req *req,
         return SMOTA_ERR_INVALID_STATE;
     }
 
-    /* 检查 HAL */
     hal = smota_hal_get();
     if (hal == NULL || hal->flash == NULL) {
         resp->error_code = SMOTA_ERR_FLASH_WRITE;
@@ -193,14 +186,18 @@ smota_err_t smota_handle_data_block_req(const struct smota_data_block_req *req,
         return SMOTA_ERR_INVALID_STATE;
     }
 
-    /* 验证偏移量连续性 */
     if (req->offset != ctx->received_size) {
         resp->error_code = SMOTA_ERR_FLASH_WRITE;
         resp->received_offset = ctx->received_size;
         return SMOTA_ERR_INVALID_PARAM;
     }
 
-    /* 写入 Flash */
+    if ((req->offset + req->length) > ctx->firmware_size) {
+        resp->error_code = SMOTA_ERR_FLASH_WRITE;
+        resp->received_offset = ctx->received_size;
+        return SMOTA_ERR_LENGTH;
+    }
+
     ret = hal->flash->write(req->offset, data, req->length);
     if (ret != req->length) {
         resp->error_code = SMOTA_ERR_FLASH_WRITE;
@@ -208,15 +205,11 @@ smota_err_t smota_handle_data_block_req(const struct smota_data_block_req *req,
         return SMOTA_ERR_FLASH;
     }
 
-    /* 更新接收进度 */
     ctx->received_size += req->length;
-    ctx->recv_len = 0;
 
-    /* 填充响应 */
     resp->error_code = 0;
     resp->received_offset = ctx->received_size;
 
-    /* 切换到传输状态 */
     if (smota_state_get() == SMOTA_STATE_HEADER_INFO) {
         smota_state_set(SMOTA_STATE_TRANSFER);
     }
@@ -231,48 +224,69 @@ smota_err_t smota_handle_data_block_req(const struct smota_data_block_req *req,
  * @return      smota_err_t 错误码
  */
 smota_err_t smota_handle_transfer_complete_req(const struct smota_transfer_complete_req *req,
-                                                struct smota_transfer_complete_resp *resp)
+                                               struct smota_transfer_complete_resp *resp)
 {
     struct smota_ctx *ctx;
     const struct smota_hal *hal;
     void *sha256_ctx;
     uint8_t hash[32];
+    uint8_t buffer[SMOTA_VERIFY_READ_CHUNK_SIZE];
+    uint32_t offset;
     int ret;
 
-    /* 参数检查 */
     if (req == NULL || resp == NULL) {
         return SMOTA_ERR_INVALID_PARAM;
     }
 
-    /* 检查状态 */
     ctx = smota_ctx_get();
     if (smota_state_get() != SMOTA_STATE_TRANSFER) {
         resp->error_code = SMOTA_ERR_INVALID_STATE;
         return SMOTA_ERR_INVALID_STATE;
     }
 
-    /* 验证总大小 */
     if (req->total_size != ctx->firmware_size) {
         resp->error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
         return SMOTA_ERR_VERSION;
     }
 
-    /* 检查 HAL */
+    if (ctx->received_size != ctx->firmware_size) {
+        resp->error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
+        return SMOTA_ERR_LENGTH;
+    }
+
     hal = smota_hal_get();
-    if (hal == NULL || hal->crypto == NULL) {
+    if (hal == NULL || hal->flash == NULL || hal->crypto == NULL) {
         resp->error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
         return SMOTA_ERR_INVALID_STATE;
     }
 
-    /* 重新计算 SHA-256 验证 */
     sha256_ctx = hal->crypto->sha256_init();
     if (sha256_ctx == NULL) {
         resp->error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
         return SMOTA_ERR_FLASH;
     }
 
-    /* 读取并计算整个固件的 SHA-256 */
-    /* TODO: 分块读取大文件进行哈希计算 */
+    offset = 0;
+    while (offset < ctx->received_size) {
+        uint32_t chunk_size = sizeof(buffer);
+        if ((ctx->received_size - offset) < chunk_size) {
+            chunk_size = ctx->received_size - offset;
+        }
+
+        ret = hal->flash->read(offset, buffer, chunk_size);
+        if (ret != (int)chunk_size) {
+            resp->error_code = SMOTA_ERR_INSTALL_FLASH_READ;
+            return SMOTA_ERR_FLASH;
+        }
+
+        ret = hal->crypto->sha256_update(sha256_ctx, buffer, chunk_size);
+        if (ret < 0) {
+            resp->error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
+            return SMOTA_ERR_FLASH;
+        }
+
+        offset += chunk_size;
+    }
 
     ret = hal->crypto->sha256_final(sha256_ctx, hash);
     if (ret < 0) {
@@ -280,16 +294,12 @@ smota_err_t smota_handle_transfer_complete_req(const struct smota_transfer_compl
         return SMOTA_ERR_FLASH;
     }
 
-    /* 比较哈希值 */
-    if (memcmp(hash, ctx->recv_buffer, 32) != 0) {
+    if (memcmp(hash, ctx->expected_hash, sizeof(ctx->expected_hash)) != 0) {
         resp->error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
         return SMOTA_ERR_VERSION;
     }
 
-    /* 填充响应 */
     resp->error_code = 0;
-
-    /* 切换到完成状态 */
     smota_state_set(SMOTA_STATE_COMPLETE);
 
     return SMOTA_ERR_OK;
@@ -302,48 +312,27 @@ smota_err_t smota_handle_transfer_complete_req(const struct smota_transfer_compl
  * @return      smota_err_t 错误码
  */
 smota_err_t smota_handle_install_req(const struct smota_install_req *req,
-                                      struct smota_install_resp *resp)
+                                     struct smota_install_resp *resp)
 {
-    const struct smota_hal *hal;
+    struct smota_ctx *ctx;
 
-    /* 参数检查 */
     if (req == NULL || resp == NULL) {
         return SMOTA_ERR_INVALID_PARAM;
     }
 
-    /* 检查状态 */
     if (smota_state_get() != SMOTA_STATE_COMPLETE) {
         resp->error_code = SMOTA_ERR_INVALID_STATE;
         return SMOTA_ERR_INVALID_STATE;
     }
 
-    /* 检查 HAL */
-    hal = smota_hal_get();
-    if (hal == NULL || hal->flash == NULL || hal->system == NULL) {
-        resp->error_code = SMOTA_ERR_FLASH_WRITE;
-        return SMOTA_ERR_INVALID_STATE;
-    }
+    ctx = smota_ctx_get();
 
-    /* 检查电池电量（可选） */
-    /* TODO: 实现电池电量检查 */
-
-    /* 检查业务状态（可选） */
-    /* TODO: 实现业务状态检查 */
-
-    /* 设置安装标志位 */
-    /* TODO: 根据 SMOTA_MODE 设置相应的标志 */
-
-    /* 填充响应 */
     resp->error_code = 0;
-    resp->estimated_time_s = 5;  /* 预估 5 秒 */
+    resp->estimated_time_s = 5;
 
-    /* 切换到安装状态 */
     smota_state_set(SMOTA_STATE_INSTALL);
+    ctx->reset_pending = 1;
 
-    /* 执行系统复位 */
-    hal->system->system_reset();
-
-    /* 不会执行到这里 */
     return SMOTA_ERR_OK;
 }
 
@@ -354,21 +343,21 @@ smota_err_t smota_handle_install_req(const struct smota_install_req *req,
  * @return      smota_err_t 错误码
  */
 smota_err_t smota_handle_activate_check_req(const struct smota_activate_check_req *req,
-                                             struct smota_activate_check_resp *resp)
+                                            struct smota_activate_check_resp *resp)
 {
-    /* 参数检查 */
+    struct smota_ctx *ctx;
+
     if (resp == NULL) {
         return SMOTA_ERR_INVALID_PARAM;
     }
 
-    /* 填充响应（实际版本号应从设备读取） */
-    resp->error_code = 0;
-    resp->fw_version_major = 1;  /* TODO: 从实际固件读取 */
-    resp->fw_version_minor = 0;
-    resp->fw_version_patch = 0;
+    (void)req;
+    ctx = smota_ctx_get();
 
-    /* 切换到激活状态 */
-    smota_state_set(SMOTA_STATE_ACTIVATE);
+    resp->error_code = 0;
+    resp->fw_version_major = ctx->current_version[0];
+    resp->fw_version_minor = ctx->current_version[1];
+    resp->fw_version_patch = ctx->current_version[2];
 
     return SMOTA_ERR_OK;
 }

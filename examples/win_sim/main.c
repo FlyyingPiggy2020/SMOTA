@@ -86,9 +86,9 @@ static void print_help(const char *prog)
     printf("Usage: %s [options]\n", prog);
     printf("Options:\n");
     printf("  -h, --help       Print this help message\n");
-    printf("  -i, --init       Initialize Flash (clear all data)\n");
+    printf("  -i, --init       Initialize Flash and reset runtime version\n");
     printf("  -s, --status     Show OTA status\n");
-    printf("  -r, --run        Run OTA poll loop (simulate device)\n");
+    printf("  -r, --run        Run OTA poll loop (TCP server on 127.0.0.1:8888)\n");
     printf("  -t, --test       Run self-test\n");
     printf("\nExample:\n");
     printf("  %s -r    # Run as device, waiting for OTA commands\n", prog);
@@ -100,12 +100,17 @@ static void print_help(const char *prog)
  */
 static void show_status(void)
 {
+    struct smota_ctx *ctx = smota_ctx_get();
     smota_state_t state = smota_get_state();
     uint8_t progress = smota_get_progress();
 
     printf("\n=== OTA Status ===\n");
     printf("State: %s\n", smota_state_to_string(state));
     printf("Progress: %d%%\n", progress);
+    printf("Running Version: %u.%u.%u\n",
+           ctx->current_version[0],
+           ctx->current_version[1],
+           ctx->current_version[2]);
 
     if (smota_get_error() != SMOTA_ERR_OK) {
         printf("Last Error: %s (code=%d)\n",
@@ -226,6 +231,8 @@ int main(int argc, char *argv[])
     bool run_device = false;
     bool run_test = false;
 
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     /* 解析命令行参数 */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -248,6 +255,7 @@ int main(int argc, char *argv[])
         flash_init();
         flash_erase(0, SMOTA_FLASH_SIZE);
         flash_deinit();
+        smota_port_reset_runtime_state();
         printf("Flash initialized.\n");
         return 0;
     }
@@ -259,16 +267,24 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    printf("smOTA initialized successfully (Win32 Simulation)\n");
-    printf("HAL: Flash=%s, Comm=stdio, Crypto=OpenSSL\n",
-           init_flash ? "file" : "memory");
-
     /* 初始化 OTA 模块 */
     ret = smota_init();
     if (ret < 0) {
         printf("Error: smota_init failed: %d\n", ret);
         return -1;
     }
+
+    {
+        uint8_t running_version[4] = {0};
+        struct smota_ctx *ctx = smota_ctx_get();
+
+        smota_port_load_running_version(running_version);
+        memcpy(ctx->current_version, running_version, sizeof(ctx->current_version));
+        memcpy(ctx->firmware_version, running_version, sizeof(ctx->firmware_version));
+    }
+
+    printf("smOTA initialized successfully (Win32 Simulation)\n");
+    printf("HAL: Flash=file, Comm=tcp:8888, Crypto=TinyCrypt\n");
 
     /* 执行选定的操作 */
     if (show_status_flag) {
@@ -286,7 +302,6 @@ int main(int argc, char *argv[])
 
     /* 清理 */
     smota_deinit();
-    flash_deinit();
 
     return 0;
 }

@@ -40,6 +40,9 @@ int comm_deinit(void);
 int comm_send(const uint8_t *data, uint32_t size);
 int comm_receive(uint8_t *data, uint32_t size, uint32_t timeout);
 
+void smota_port_load_running_version(uint8_t version[4]);
+void smota_port_reset_runtime_state(void);
+
 /*---------- 系统驱动函数 ----------*/
 
 uint64_t system_get_tick_ms(void);

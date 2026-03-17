@@ -22,40 +22,45 @@ function handleSelectPanel(panel) {
 </script>
 
 <template>
-    <n-config-provider :theme-overrides="themeOverrides">
-        <n-layout class="flex-1">
-            <n-layout-header class="border-b-2 border-gray-600 h-12">
-                <HeaderMenu />
-            </n-layout-header>
+    <n-config-provider :theme-overrides="themeOverrides" class="h-full">
+        <n-layout position="absolute">
+            <div class="h-full flex flex-col">
+                
+                <!-- Header -->
+                <n-layout-header class="h-12 flex-none border-b-2 border-gray-600 box-border z-20 relative">
+                    <HeaderMenu />
+                </n-layout-header>
 
-            <div class="flex h-[calc(100%-48px)]">
-                <!-- 最左侧：常驻图标栏 -->
-                <div >
-                    <SidebarIcon
-                        :active="activePanel"
-                        @update:active="handleSelectPanel"
-                    />
-                </div>
+                <!-- 下方主体 -->
+                <div class="flex-1 flex overflow-hidden relative">
+                    <!-- 左侧图标栏 -->
+                    <div class="w-12 h-full flex-none bg-gray-50 border-r-2 border-gray-600 z-10">
+                        <SidebarIcon
+                            :active="activePanel"
+                            @update:active="handleSelectPanel"
+                        />
+                    </div>
 
-                <!-- 中间：配置面板 -->
-                <div
-                    class="border-r-2 border-gray-600 transition-all duration-300 overflow-hidden"
-                    :style="{ width: collapsed ? '0px' : '250px' }"
-                >
+                    <!-- 中间配置面板 -->
                     <div
-                        v-show="!collapsed"
-                        class="w-64 h-full transition-opacity duration-300 "
-                        :class="collapsed ? 'opacity-0' : 'opacity-100'"
+                        class="h-full flex-none transition-all duration-300 ease-in-out border-r-2 border-gray-600 overflow-hidden bg-white"
+                        :style="{ width: collapsed ? '0px' : '250px', borderWidth: collapsed ? '0px' : '' }"
                     >
-                        <SidebarConfig :panel="activePanel" />
+                        <div 
+                            class="w-[250px] h-full transition-opacity duration-200 whitespace-nowrap"
+                            :class="collapsed ? 'opacity-0 delay-0' : 'opacity-100 delay-100'"
+                        >
+                            <SidebarConfig :panel="activePanel" />
+                        </div>
+                    </div>
+
+                    <!-- 右侧主内容 -->
+                    <div class="flex-1 h-full w-0 overflow-auto bg-gray-50/50 p-4">
+                        <MainContent />
                     </div>
                 </div>
-
-                <!-- 右侧：主内容 -->
-                <div class="flex-1 h-screen">
-                    <MainContent />
-                </div>
             </div>
+            
         </n-layout>
     </n-config-provider>
 </template>

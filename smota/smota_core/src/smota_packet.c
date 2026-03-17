@@ -4,18 +4,18 @@
  * @Author       : lxf
  * @Date         : 2026-01-29 09:57:46
  * @LastEditors  : lxf_zjnb@qq.com
- * @LastEditTime : 2026-01-30 10:00:00
+ * @LastEditTime : 2026-03-06 10:49:25
  * @Brief        : smOTA 包解析实现
  */
 
 /*---------- includes ----------*/
 #include "../../smota.h"
-#include "smota_packet.h"
+#include "../inc/smota_packet.h"
 
 /*---------- macro ----------*/
 /* CRC16 多项式: 0x1021 (CRC-16-CCITT) */
-#define CRC16_POLY                      0x1021
-#define CRC16_INIT_VAL                  0xFFFF
+#define CRC16_POLY     0x1021
+#define CRC16_INIT_VAL 0xFFFF
 
 /*---------- type define ----------*/
 
@@ -31,7 +31,7 @@
  * @brief  计算数据的CRC16校验值 (直接计算法)
  * @param  data: 数据指针
  * @param  len: 数据长度
- * @return 16位CRC校验值
+ * @return 16位CRC校验值，NULL或空数据返回0
  * @note   多项式: 0x1021, 初始值: 0xFFFF (CRC-16-CCITT)
  */
 uint16_t smota_crc16_compute(const uint8_t *data, uint16_t len)
@@ -39,6 +39,10 @@ uint16_t smota_crc16_compute(const uint8_t *data, uint16_t len)
     uint16_t crc = CRC16_INIT_VAL;
     uint16_t i;
     uint16_t j;
+
+    if (data == NULL || len == 0) {
+        return 0;
+    }
 
     for (i = 0; i < len; i++) {
         crc ^= (uint16_t)data[i] << 8;
@@ -57,8 +61,9 @@ uint16_t smota_crc16_compute(const uint8_t *data, uint16_t len)
 /**
  * @brief  验证帧的CRC16校验
  * @param  frame: 完整帧数据指针 (包含CRC字段)
- * @param  len: 帧数据长度 (不包含CRC字段的长度)
+ * @param  len: 帧数据长度 (不包含CRC字段的长度，需要额外2字节存储CRC)
  * @return 0=校验成功, <0=校验失败
+ * @note   调用者需确保 frame 缓冲区至少有 len + 2 字节
  */
 int smota_crc16_verify(const uint8_t *frame, uint16_t len)
 {
@@ -88,10 +93,10 @@ int smota_crc16_verify(const uint8_t *frame, uint16_t len)
  * @param  data: 原始数据指针
  * @param  len: 数据长度
  * @param  frame: 输出解析后的帧结构
- * @return 0=成功, <0=失败
+ * @return smota_err_t
  * @note   解析成功后，frame->payload 指向 data 中的 payload 位置
  */
-int smota_frame_parse(const uint8_t *data, uint16_t len, struct smota_frame *frame)
+smota_err_t smota_frame_parse(const uint8_t *data, uint16_t len, struct smota_frame *frame)
 {
     struct smota_frame_header *header;
     uint16_t expected_min_len;
@@ -100,38 +105,31 @@ int smota_frame_parse(const uint8_t *data, uint16_t len, struct smota_frame *fra
 
     /* 参数检查 */
     if (data == NULL || frame == NULL) {
-        return -1;
+        return SMOTA_ERR_INVALID_PARAM;
     }
 
     expected_min_len = sizeof(struct smota_frame_header) + sizeof(uint16_t);
     if (len < expected_min_len) {
-        return -2;
+        return SMOTA_ERR_INVALID_PARAM;
     }
 
     header = (struct smota_frame_header *)data;
 
     /* 验证 SOF */
-    if (data[0] != 's' || data[1] != 'm' || data[2] != 'O' ||
-        data[3] != 'T' || data[4] != 'A') {
-        return -3;
-    }
-
-    /* 验证协议版本 */
-    if (header->ver != SMOTA_PROTOCOL_VER) {
-        return -4;
+    if (data[0] != 's' || data[1] != 'm' || data[2] != 'O' || data[3] != 'T' || data[4] != 'A') {
+        return SMOTA_ERR_INVALID_PARAM;
     }
 
     /* 验证 payload 长度 */
     if (header->length > (len - sizeof(struct smota_frame_header) - sizeof(uint16_t))) {
-        return -5;
+        return SMOTA_ERR_LENGTH;
     }
 
     /* 验证 CRC */
     calc_crc = smota_crc16_compute(data, sizeof(struct smota_frame_header) + header->length);
-    frame_crc = (uint16_t)data[sizeof(struct smota_frame_header) + header->length] |
-                ((uint16_t)data[sizeof(struct smota_frame_header) + header->length + 1] << 8);
+    frame_crc = (uint16_t)data[sizeof(struct smota_frame_header) + header->length] | ((uint16_t)data[sizeof(struct smota_frame_header) + header->length + 1] << 8);
     if (calc_crc != frame_crc) {
-        return -6;
+        return SMOTA_ERR_CRC;
     }
 
     /* 填充帧结构 */
@@ -151,8 +149,7 @@ int smota_frame_parse(const uint8_t *data, uint16_t len, struct smota_frame *fra
  * @param  buflen: 缓冲区大小
  * @return 构建的帧长度, <0=失败
  */
-int smota_frame_build(uint8_t cmd, const uint8_t *payload, uint16_t payload_len,
-                      uint8_t *buffer, uint16_t buflen)
+int smota_frame_build(uint8_t cmd, const uint8_t *payload, uint16_t payload_len, uint8_t *buffer, uint16_t buflen)
 {
     struct smota_frame_header *header;
     uint16_t frame_len;
@@ -177,7 +174,7 @@ int smota_frame_build(uint8_t cmd, const uint8_t *payload, uint16_t payload_len,
     header->sof[4] = 'A';
     header->ver = SMOTA_PROTOCOL_VER;
     header->frag = 0;
-    header->seq = 0;  /* TODO: 实现序号管理 */
+    header->seq = 0; /* TODO: 实现序号管理 */
     header->cmd = cmd;
     header->length = payload_len;
 
@@ -196,6 +193,31 @@ int smota_frame_build(uint8_t cmd, const uint8_t *payload, uint16_t payload_len,
     buffer[sizeof(struct smota_frame_header) + payload_len + 1] = (uint8_t)(crc >> 8);
 
     return frame_len;
+}
+
+/**
+ * @brief  在缓冲区中搜索下一个有效的 SOF 位置
+ * @param  data: 数据缓冲区
+ * @param  len: 缓冲区长度
+ * @return 找到的 SOF 偏移量，未找到返回 -1
+ * @note   从偏移 0 开始搜索，用于查找下一个 "smOTA" 标记
+ */
+int smota_find_sof(const uint8_t *data, uint16_t len)
+{
+    uint16_t i;
+
+    if (data == NULL || len < SMOTA_SOF_SIZE) {
+        return -1;
+    }
+
+    /* 搜索 "smOTA" 标记 效率O(n) */
+    for (i = 0; i <= len - SMOTA_SOF_SIZE; i++) {
+        if (data[i] == 's' && data[i + 1] == 'm' && data[i + 2] == 'O' && data[i + 3] == 'T' && data[i + 4] == 'A') {
+            return i;
+        }
+    }
+
+    return -1;
 }
 
 /**

@@ -13,8 +13,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
-#include "smota_verify.h"
-#include "../smota_hal/smota_hal.h"
+#include "../inc/smota_verify.h"
+#include "../../smota_hal/smota_hal.h"
 
 /*---------- macro ----------*/
 

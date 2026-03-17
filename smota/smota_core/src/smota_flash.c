@@ -10,9 +10,9 @@
 
 /*---------- includes ----------*/
 #include <string.h>
-#include "smota_flash.h"
-#include "smota_config.h"
-#include "../smota_hal/smota_hal.h"
+#include "../inc/smota_flash.h"
+#include "../inc/smota_config.h"
+#include "../../smota_hal/smota_hal.h"
 
 /*---------- macro ----------*/
 

@@ -27,6 +27,7 @@ static const char *g_err_string[] = {
     "OK",
     "INVALID_STATE",
     "INVALID_PARAM",
+    "LENGTH",
     "TIMEOUT",
     "CRC",
     "VERSION",

@@ -4,7 +4,7 @@
  * @Author       : lxf
  * @Date         : 2026-01-29 09:57:46
  * @LastEditors  : lxf_zjnb@qq.com
- * @LastEditTime : 2026-01-30 11:00:00
+ * @LastEditTime : 2026-03-06 10:26:24
  * @Brief        : smOTA 核心 API 实现
  */
 
@@ -13,14 +13,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
-#include "smota_packet.h"
-#include "smota_state.h"
-#include "smota_types.h"
-#include "smota_config.h"
-#include "../smota_hal/smota_hal.h"
+#include "smota.h"
 
 /*---------- macro ----------*/
-#define SMOTA_RECV_BUFFER_SIZE    1024    /* 接收缓冲区大小 */
+#define SMOTA_RECV_BUFFER_SIZE 1024 /* 接收缓冲区大小 */
 
 /*---------- type define ----------*/
 
@@ -58,6 +54,7 @@ static bool g_initialized = false;
 smota_err_t smota_init(void)
 {
     struct smota_ctx *ctx;
+    int ret;
 
     /* 防止重复初始化 */
     if (g_initialized) {
@@ -71,17 +68,42 @@ smota_err_t smota_init(void)
         return g_last_error;
     }
 
+    if (g_hal->flash != NULL && g_hal->flash->init != NULL) {
+        ret = g_hal->flash->init();
+        if (ret < 0) {
+            g_last_error = SMOTA_ERR_FLASH;
+            return g_last_error;
+        }
+    }
+
+    if (g_hal->comm != NULL && g_hal->comm->init != NULL) {
+        ret = g_hal->comm->init();
+        if (ret < 0) {
+            if (g_hal->flash != NULL && g_hal->flash->deinit != NULL) {
+                g_hal->flash->deinit();
+            }
+            g_last_error = SMOTA_ERR_INVALID_STATE;
+            return g_last_error;
+        }
+    }
+
     /* 初始化上下文 */
     ctx = smota_ctx_get();
     ctx->state = SMOTA_STATE_IDLE;
     ctx->firmware_size = 0;
     ctx->received_size = 0;
     ctx->flash_addr = 0;
-    ctx->timeout_ms = 5000;  /* 默认 5 秒超时 */
+    ctx->timeout_ms = 5000; /* 默认 5 秒超时 */
     ctx->recv_buffer = g_recv_buffer;
     ctx->recv_len = 0;
     ctx->last_packet_time = 0;
     ctx->retry_count = 0;
+    ctx->reset_pending = 0;
+    ctx->sync_error_count = 0;
+    ctx->frames_processed = 0;
+    memset(ctx->expected_hash, 0, sizeof(ctx->expected_hash));
+    memset(ctx->signature_r, 0, sizeof(ctx->signature_r));
+    memset(ctx->signature_s, 0, sizeof(ctx->signature_s));
 
     /* 重置状态机 */
     smota_state_reset();
@@ -100,6 +122,14 @@ smota_err_t smota_deinit(void)
 {
     if (!g_initialized) {
         return SMOTA_ERR_OK;
+    }
+
+    if (g_hal != NULL && g_hal->comm != NULL && g_hal->comm->deinit != NULL) {
+        g_hal->comm->deinit();
+    }
+
+    if (g_hal != NULL && g_hal->flash != NULL && g_hal->flash->deinit != NULL) {
+        g_hal->flash->deinit();
     }
 
     /* 重置状态机 */
@@ -163,119 +193,135 @@ smota_err_t smota_poll(void)
     /* 尝试接收数据 */
     if (g_hal != NULL && g_hal->comm != NULL && g_hal->comm->receive != NULL) {
         recv_len = g_hal->comm->receive(g_recv_buffer + ctx->recv_len,
-                                         SMOTA_RECV_BUFFER_SIZE - ctx->recv_len,
-                                         0);  /* 非阻塞 */
+                                        SMOTA_RECV_BUFFER_SIZE - ctx->recv_len,
+                                        0); /* 非阻塞 */
         if (recv_len > 0) {
             ctx->recv_len += recv_len;
             ctx->last_packet_time = current_time;
 
-            /* 检查是否收到完整帧 (最小帧长度) */
-            if (ctx->recv_len >= 12) {  /* header(10) + length(2) */
+            /* 循环处理缓冲区中的所有完整帧 */
+            while (ctx->recv_len >= sizeof(struct smota_frame_header) + sizeof(uint16_t)) {
+                uint32_t consumed; /* 已处理的帧长度 */
+                int sof_offset;    /* SOF 搜索结果 */
+
                 /* 解析帧 */
                 ret = smota_frame_parse(g_recv_buffer, ctx->recv_len, &frame);
-                if (ret == 0) {
+
+                if (ret == SMOTA_ERR_OK) {
                     /* 处理命令 */
                     switch (frame.header.cmd) {
-                    case SMOTA_CMD_HANDSHAKE:
-                        ret = smota_handle_handshake_req(
-                            (struct smota_handshake_req *)frame.payload,
-                            &handshake_resp);
-                        if (ret == SMOTA_ERR_OK) {
-                            resp_len = smota_frame_build(
-                                SMOTA_CMD_HANDSHAKE_RESP,
-                                (uint8_t *)&handshake_resp,
-                                sizeof(handshake_resp),
-                                resp_buffer, sizeof(resp_buffer));
-                            if (resp_len > 0 && g_hal->comm->send != NULL) {
-                                g_hal->comm->send(resp_buffer, resp_len);
+                        case SMOTA_CMD_HANDSHAKE:
+                            ret = smota_handle_handshake_req(
+                                (struct smota_handshake_req *)frame.payload,
+                                &handshake_resp);
+                            if (ret == SMOTA_ERR_OK) {
+                                resp_len = smota_frame_build(
+                                    SMOTA_CMD_HANDSHAKE_RESP,
+                                    (uint8_t *)&handshake_resp,
+                                    sizeof(handshake_resp),
+                                    resp_buffer,
+                                    sizeof(resp_buffer));
+                                if (resp_len > 0 && g_hal->comm->send != NULL) {
+                                    g_hal->comm->send(resp_buffer, resp_len);
+                                }
                             }
-                        }
-                        break;
+                            break;
 
-                    case SMOTA_CMD_HEADER_INFO:
-                        ret = smota_handle_header_info_req(
-                            (struct smota_header_info_req *)frame.payload,
-                            &header_resp);
-                        if (ret == SMOTA_ERR_OK) {
-                            resp_len = smota_frame_build(
-                                SMOTA_CMD_HEADER_INFO_RESP,
-                                (uint8_t *)&header_resp,
-                                sizeof(header_resp),
-                                resp_buffer, sizeof(resp_buffer));
-                            if (resp_len > 0 && g_hal->comm->send != NULL) {
-                                g_hal->comm->send(resp_buffer, resp_len);
+                        case SMOTA_CMD_HEADER_INFO:
+                            ret = smota_handle_header_info_req(
+                                (struct smota_header_info_req *)frame.payload,
+                                &header_resp);
+                            if (ret == SMOTA_ERR_OK) {
+                                resp_len = smota_frame_build(
+                                    SMOTA_CMD_HEADER_INFO_RESP,
+                                    (uint8_t *)&header_resp,
+                                    sizeof(header_resp),
+                                    resp_buffer,
+                                    sizeof(resp_buffer));
+                                if (resp_len > 0 && g_hal->comm->send != NULL) {
+                                    g_hal->comm->send(resp_buffer, resp_len);
+                                }
                             }
-                        }
-                        break;
+                            break;
 
-                    case SMOTA_CMD_DATA_BLOCK:
-                        ret = smota_handle_data_block_req(
-                            (struct smota_data_block_req *)frame.payload,
-                            frame.payload + sizeof(struct smota_data_block_req),
-                            &data_resp);
-                        if (ret == SMOTA_ERR_OK) {
-                            resp_len = smota_frame_build(
-                                SMOTA_CMD_DATA_BLOCK_RESP,
-                                (uint8_t *)&data_resp,
-                                sizeof(data_resp),
-                                resp_buffer, sizeof(resp_buffer));
-                            if (resp_len > 0 && g_hal->comm->send != NULL) {
-                                g_hal->comm->send(resp_buffer, resp_len);
+                        case SMOTA_CMD_DATA_BLOCK:
+                            ret = smota_handle_data_block_req(
+                                (struct smota_data_block_req *)frame.payload,
+                                frame.payload + sizeof(struct smota_data_block_req),
+                                &data_resp);
+                            if (ret == SMOTA_ERR_OK) {
+                                resp_len = smota_frame_build(
+                                    SMOTA_CMD_DATA_BLOCK_RESP,
+                                    (uint8_t *)&data_resp,
+                                    sizeof(data_resp),
+                                    resp_buffer,
+                                    sizeof(resp_buffer));
+                                if (resp_len > 0 && g_hal->comm->send != NULL) {
+                                    g_hal->comm->send(resp_buffer, resp_len);
+                                }
                             }
-                        }
-                        break;
+                            break;
 
-                    case SMOTA_CMD_DATA_COMPLETE:
-                        ret = smota_handle_transfer_complete_req(
-                            (struct smota_transfer_complete_req *)frame.payload,
-                            &complete_resp);
-                        if (ret == SMOTA_ERR_OK) {
-                            resp_len = smota_frame_build(
-                                SMOTA_CMD_DATA_COMPLETE_RESP,
-                                (uint8_t *)&complete_resp,
-                                sizeof(complete_resp),
-                                resp_buffer, sizeof(resp_buffer));
-                            if (resp_len > 0 && g_hal->comm->send != NULL) {
-                                g_hal->comm->send(resp_buffer, resp_len);
+                        case SMOTA_CMD_DATA_COMPLETE:
+                            ret = smota_handle_transfer_complete_req(
+                                (struct smota_transfer_complete_req *)frame.payload,
+                                &complete_resp);
+                            if (ret == SMOTA_ERR_OK) {
+                                resp_len = smota_frame_build(
+                                    SMOTA_CMD_DATA_COMPLETE_RESP,
+                                    (uint8_t *)&complete_resp,
+                                    sizeof(complete_resp),
+                                    resp_buffer,
+                                    sizeof(resp_buffer));
+                                if (resp_len > 0 && g_hal->comm->send != NULL) {
+                                    g_hal->comm->send(resp_buffer, resp_len);
+                                }
                             }
-                        }
-                        break;
+                            break;
 
-                    case SMOTA_CMD_INSTALL:
-                        ret = smota_handle_install_req(
-                            (struct smota_install_req *)frame.payload,
-                            &install_resp);
-                        if (ret == SMOTA_ERR_OK) {
-                            resp_len = smota_frame_build(
-                                SMOTA_CMD_INSTALL_RESP,
-                                (uint8_t *)&install_resp,
-                                sizeof(install_resp),
-                                resp_buffer, sizeof(resp_buffer));
-                            if (resp_len > 0 && g_hal->comm->send != NULL) {
-                                g_hal->comm->send(resp_buffer, resp_len);
+                        case SMOTA_CMD_INSTALL:
+                            ret = smota_handle_install_req(
+                                (struct smota_install_req *)frame.payload,
+                                &install_resp);
+                            if (ret == SMOTA_ERR_OK) {
+                                resp_len = smota_frame_build(
+                                    SMOTA_CMD_INSTALL_RESP,
+                                    (uint8_t *)&install_resp,
+                                    sizeof(install_resp),
+                                    resp_buffer,
+                                    sizeof(resp_buffer));
+                                if (resp_len > 0 && g_hal->comm->send != NULL) {
+                                    g_hal->comm->send(resp_buffer, resp_len);
+                                }
+                                if (ctx->reset_pending != 0 &&
+                                    system != NULL &&
+                                    system->system_reset != NULL) {
+                                    ctx->reset_pending = 0;
+                                    system->system_reset();
+                                }
                             }
-                        }
-                        break;
+                            break;
 
-                    case SMOTA_CMD_ACTIVATE_CHECK:
-                        ret = smota_handle_activate_check_req(
-                            (struct smota_activate_check_req *)frame.payload,
-                            &activate_resp);
-                        if (ret == SMOTA_ERR_OK) {
-                            resp_len = smota_frame_build(
-                                SMOTA_CMD_ACTIVATE_CHECK_RESP,
-                                (uint8_t *)&activate_resp,
-                                sizeof(activate_resp),
-                                resp_buffer, sizeof(resp_buffer));
-                            if (resp_len > 0 && g_hal->comm->send != NULL) {
-                                g_hal->comm->send(resp_buffer, resp_len);
+                        case SMOTA_CMD_ACTIVATE_CHECK:
+                            ret = smota_handle_activate_check_req(
+                                (struct smota_activate_check_req *)frame.payload,
+                                &activate_resp);
+                            if (ret == SMOTA_ERR_OK) {
+                                resp_len = smota_frame_build(
+                                    SMOTA_CMD_ACTIVATE_CHECK_RESP,
+                                    (uint8_t *)&activate_resp,
+                                    sizeof(activate_resp),
+                                    resp_buffer,
+                                    sizeof(resp_buffer));
+                                if (resp_len > 0 && g_hal->comm->send != NULL) {
+                                    g_hal->comm->send(resp_buffer, resp_len);
+                                }
                             }
-                        }
-                        break;
+                            break;
 
-                    default:
-                        /* 未知命令 */
-                        break;
+                        default:
+                            /* 未知命令 */
+                            break;
                     }
 
                     /* 更新最后错误码 */
@@ -283,18 +329,76 @@ smota_err_t smota_poll(void)
                         g_last_error = ret;
                     }
 
-                    /* 移动缓冲区 */
-                    ctx->recv_len -= (frame.header.length + sizeof(struct smota_frame_header) + sizeof(uint16_t));
+                    /* 更新已处理帧计数 */
+                    ctx->frames_processed++;
+
+                    /* 移动缓冲区，移除已处理的帧 */
+                    consumed = sizeof(struct smota_frame_header) + frame.header.length + sizeof(uint16_t);
+                    ctx->recv_len -= consumed;
                     if (ctx->recv_len > 0) {
                         memmove(g_recv_buffer,
-                                g_recv_buffer + frame.header.length + sizeof(struct smota_frame_header) + sizeof(uint16_t),
+                                g_recv_buffer + consumed,
                                 ctx->recv_len);
                     }
-                } else if (ret == -5) {
-                    /* 帧不完整，继续接收 */
+
+                } else if (ret == SMOTA_ERR_LENGTH) {
+                    /* 帧不完整，检查是否为异常长度值 */
+                    struct smota_frame_header *hdr = (struct smota_frame_header *)g_recv_buffer;
+                    uint16_t max_possible_len = SMOTA_RECV_BUFFER_SIZE - sizeof(struct smota_frame_header) - sizeof(uint16_t);
+
+                    /* 检查长度是否异常：
+                     * 1. 长度为 0
+                     * 2. 长度超过协议定义的最大值
+                     * 3. 长度超过接收缓冲区容量（无论如何都接收不完）
+                     */
+                    if (hdr->length == 0 ||
+                        hdr->length > SMOTA_MAX_PAYLOAD_LEN ||
+                        hdr->length > max_possible_len) {
+                        /* 尝试搜索下一个 SOF 进行恢复 */
+                        ctx->sync_error_count++;
+                        sof_offset = smota_find_sof(g_recv_buffer + 1, ctx->recv_len - 1);
+                        if (sof_offset >= 0) {
+                            /* 找到下一个 SOF（sof_offset 是相对偏移+1） */
+                            ctx->recv_len -= (sof_offset + 1);
+                            if (ctx->recv_len > 0) {
+                                memmove(g_recv_buffer, g_recv_buffer + sof_offset + 1, ctx->recv_len);
+                            }
+                            continue;
+                        } else {
+                            /* 未找到 SOF，清空缓冲区 */
+                            ctx->recv_len = 0;
+                            break;
+                        }
+                    }
+                    /* 长度合理，等待更多数据 */
+                    break;
+
                 } else {
-                    /* 帧解析错误，丢弃缓冲区 */
-                    ctx->recv_len = 0;
+                    /* 帧解析错误，尝试搜索下一个 SOF 进行乱码恢复 */
+                    ctx->sync_error_count++;
+                    sof_offset = smota_find_sof(g_recv_buffer, ctx->recv_len);
+                    if (sof_offset > 0) {
+                        /* 找到下一个 SOF，丢弃前面的无效数据 */
+                        ctx->recv_len -= sof_offset;
+                        if (ctx->recv_len > 0) {
+                            memmove(g_recv_buffer, g_recv_buffer + sof_offset, ctx->recv_len);
+                        }
+                        /* 继续循环尝试解析下一帧 */
+                        continue;
+                    } else if (sof_offset == 0) {
+                        /* 当前位置就是 SOF，但解析失败（可能是 CRC 错误或其他问题）
+                         * 跳过当前字节，继续搜索 */
+                        ctx->recv_len -= 1;
+                        if (ctx->recv_len > 0) {
+                            memmove(g_recv_buffer, g_recv_buffer + 1, ctx->recv_len);
+                        }
+                        /* 继续循环尝试解析 */
+                        continue;
+                    } else {
+                        /* 未找到任何 SOF，清空缓冲区等待新数据 */
+                        ctx->recv_len = 0;
+                        break;
+                    }
                 }
             }
         }

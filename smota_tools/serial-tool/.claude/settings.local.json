@@ -3,7 +3,12 @@
     "allow": [
       "Bash(cargo check:*)",
       "Bash(cargo doc:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "mcp__web-search-prime__webSearchPrime",
+      "mcp__zread__search_doc",
+      "mcp__web-reader__webReader",
+      "Bash(pnpm tauri:*)",
+      "Bash(cargo build)"
     ]
   }
 }

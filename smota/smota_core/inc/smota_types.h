@@ -45,6 +45,7 @@ typedef enum {
     SMOTA_ERR_OK = 0,            /*!< 无错误 */
     SMOTA_ERR_INVALID_STATE,     /*!< 无效状态 */
     SMOTA_ERR_INVALID_PARAM,     /*!< 无效参数 */
+    SMOTA_ERR_LENGTH,            /*!< 无效长度 */
     SMOTA_ERR_TIMEOUT,           /*!< 操作超时 */
     SMOTA_ERR_CRC,               /*!< CRC 校验失败 */
     SMOTA_ERR_VERSION,           /*!< 版本验证失败 */
@@ -65,12 +66,19 @@ struct smota_ctx {
     uint32_t firmware_size;                  /*!< 固件总大小（字节） */
     uint32_t received_size;                  /*!< 已接收数据大小（字节） */
     uint8_t firmware_version[4];             /*!< 固件版本号 */
+    uint8_t current_version[4];              /*!< 当前运行固件版本号 */
+    uint8_t expected_hash[32];               /*!< 固件期望 SHA-256 */
+    uint8_t signature_r[32];                 /*!< ECDSA 签名 r 分量 */
+    uint8_t signature_s[32];                 /*!< ECDSA 签名 s 分量 */
     uint32_t flash_addr;                     /*!< 目标 Flash 起始地址 */
     uint32_t timeout_ms;                     /*!< 通信超时时间（毫秒） */
     uint8_t *recv_buffer;                    /*!< 接收缓冲区指针 */
     uint32_t recv_len;                       /*!< 已接收数据长度 */
     uint32_t last_packet_time;               /*!< 最后接收数据包的时间戳 */
     uint8_t retry_count;                     /*!< 重试计数 */
+    uint8_t reset_pending;                   /*!< 响应发送后执行重启 */
+    uint32_t sync_error_count;               /*!< 同步错误计数（乱码恢复次数） */
+    uint32_t frames_processed;               /*!< 已处理的帧数 */
 };
 
 /**

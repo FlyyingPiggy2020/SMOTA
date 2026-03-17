@@ -12,9 +12,20 @@
 
 mod commands;
 
+use commands::serial_commands::SerialStateState;
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![commands::serial_commands::list_ports])
+        .manage(SerialStateState::default())
+        .invoke_handler(tauri::generate_handler![
+            commands::serial_commands::list_ports,
+            commands::serial_commands::open_serial,
+            commands::serial_commands::close_serial,
+            commands::serial_commands::check_connection_status,
+            commands::serial_commands::send_data,
+            commands::serial_commands::receive_data,
+            commands::serial_commands::export_logs
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

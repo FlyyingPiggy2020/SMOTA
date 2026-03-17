@@ -42,6 +42,7 @@ extern "C" {
 #include "smota_core/inc/smota_packet.h"
 #include "smota_core/inc/smota_verify.h"
 #include "smota_core/inc/smota_flash.h"
+#include "smota_hal/smota_hal.h"
 
 /*==============================================================================
  * 4. 加密模块（根据配置条件包含）
@@ -70,13 +71,13 @@ smota_err_t smota_init(void);
 /**
  * @brief       去初始化 OTA 模块
  */
-void smota_deinit(void);
+smota_err_t smota_deinit(void);
 
 /**
  * @brief       OTA 主轮询函数
  * @note        需要在主循环中周期性调用，建议每1ms调用一次
  */
-void smota_poll(void);
+smota_err_t smota_poll(void);
 
 /**
  * @brief       启动 OTA 升级（主动触发）
