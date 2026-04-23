@@ -1,0 +1,1 @@
+"""smOTA host application package."""
