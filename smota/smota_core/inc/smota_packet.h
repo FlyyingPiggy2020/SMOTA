@@ -38,6 +38,7 @@ extern "C" {
 #define SMOTA_CMD_DATA_COMPLETE        0x04 /* 数据包传输完毕 */
 #define SMOTA_CMD_INSTALL              0x05 /* 触发安装请求 */
 #define SMOTA_CMD_ACTIVATE_CHECK       0x06 /* 状态确认请求 */
+#define SMOTA_CMD_QUERY_VERSION        0x07 /* 查询当前固件版本 */
 
 /* 应答标志位 (D7置位) */
 #define SMOTA_CMD_RESPONSE_FLAG        0x80
@@ -49,6 +50,7 @@ extern "C" {
 #define SMOTA_CMD_DATA_COMPLETE_RESP   (SMOTA_CMD_DATA_COMPLETE | SMOTA_CMD_RESPONSE_FLAG)
 #define SMOTA_CMD_INSTALL_RESP         (SMOTA_CMD_INSTALL | SMOTA_CMD_RESPONSE_FLAG)
 #define SMOTA_CMD_ACTIVATE_CHECK_RESP  (SMOTA_CMD_ACTIVATE_CHECK | SMOTA_CMD_RESPONSE_FLAG)
+#define SMOTA_CMD_QUERY_VERSION_RESP   (SMOTA_CMD_QUERY_VERSION | SMOTA_CMD_RESPONSE_FLAG)
 
 /* 通用错误码定义 (uint32_t bit位) */
 #define SMOTA_ERR_PROTOCOL_MISMATCH    (1U << 0)  /* bit0: 协议版本不匹配 */
@@ -243,6 +245,23 @@ struct smota_activate_check_resp {
     uint8_t fw_version_patch; /* 当前运行的补丁版本号 */
 };
 
+/**
+ * @brief  固件版本查询请求 (Server -> Device, 0x07)
+ */
+struct smota_query_version_req {
+    uint32_t reserved; /* 保留字段 */
+};
+
+/**
+ * @brief  固件版本查询应答 (Device -> Server, 0x87)
+ */
+struct smota_query_version_resp {
+    uint32_t error_code;      /* 0=成功 */
+    uint8_t fw_version_major; /* 当前运行的主版本号 */
+    uint8_t fw_version_minor; /* 当前运行的次版本号 */
+    uint8_t fw_version_patch; /* 当前运行的补丁版本号 */
+};
+
 #pragma pack(pop)
 
 /*---------- variable prototype ----------*/
@@ -348,6 +367,15 @@ smota_err_t smota_handle_install_req(const struct smota_install_req *req,
  */
 smota_err_t smota_handle_activate_check_req(const struct smota_activate_check_req *req,
                                              struct smota_activate_check_resp *resp);
+
+/**
+ * @brief  处理固件版本查询请求 (0x07)
+ * @param[in]   req: 固件版本查询请求结构体
+ * @param[out]  resp: 固件版本查询响应结构体
+ * @return      smota_err_t 错误码
+ */
+smota_err_t smota_handle_query_version_req(const struct smota_query_version_req *req,
+                                           struct smota_query_version_resp *resp);
 
 /**
  * @brief  在缓冲区中搜索下一个有效的 SOF 位置

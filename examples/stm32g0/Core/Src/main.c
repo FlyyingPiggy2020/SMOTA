@@ -22,6 +22,8 @@
 #include "usbd_cdc_if.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <string.h>
+#include "smota_core/inc/smota_packet.h"
 
 /* USER CODE END Includes */
 
@@ -67,6 +69,26 @@ FDCAN_TxHeaderTypeDef TxHeader;
 uint8_t TxData_To_CAN2[8] = {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11};
 uint8_t TxData_To_CAN1[8] = {0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22};
 
+struct ota_runtime_ctx {
+  uint8_t current_version[3];
+  uint8_t target_version[3];
+  uint32_t firmware_size;
+  uint32_t received_size;
+  uint8_t handshake_done;
+  uint8_t header_done;
+  uint8_t transfer_complete;
+};
+
+static struct ota_runtime_ctx g_ota_ctx = {
+  .current_version = {1, 0, 0},
+  .target_version = {1, 0, 0},
+  .firmware_size = 0,
+  .received_size = 0,
+  .handshake_done = 0,
+  .header_done = 0,
+  .transfer_complete = 0,
+};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -79,6 +101,10 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN PFP */
+static void ota_reset_transfer(void);
+static int ota_send_response(uint8_t cmd, const void *payload, uint16_t payload_len);
+static void ota_process_frame(const struct smota_frame *frame);
+static void ota_poll_serial(void);
 
 /* USER CODE END PFP */
 
@@ -87,6 +113,14 @@ static void MX_USART3_UART_Init(void);
 #define RX_BUF_SIZE 128
 uint8_t rx_buffer1[RX_BUF_SIZE];
 uint8_t rx_buffer2[RX_BUF_SIZE];
+
+#define OTA_RX_CACHE_SIZE 2048
+#define OTA_TX_FRAME_SIZE 320
+#define OTA_FLASH_FREE_SIZE (256U * 1024U)
+#define USB_CDC_HEARTBEAT_ENABLE 0
+static uint8_t g_ota_rx_cache[OTA_RX_CACHE_SIZE];
+static uint32_t g_ota_rx_len = 0;
+static uint8_t g_ota_tx_frame[OTA_TX_FRAME_SIZE];
 /* USER CODE END 0 */
 
 /**
@@ -151,33 +185,24 @@ int main(void) {
   TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
   TxHeader.MessageMarker = 0;
 
-  uint8_t hello_msg[] = "STM32G0 UART2 Ready!";
-  HAL_UART_Transmit(&huart2, hello_msg, sizeof(hello_msg) - 1, 100);
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
-
-  if (HAL_UARTEx_ReceiveToIdle_IT(&huart1, rx_buffer1, RX_BUF_SIZE) != HAL_OK) {
-    Error_Handler();
-  }
-  if (HAL_UARTEx_ReceiveToIdle_IT(&huart2, rx_buffer2, RX_BUF_SIZE) != HAL_OK) {
-    Error_Handler();
-  }
+  ota_reset_transfer();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1) {
-    // 2. FDCAN2 向总线发报文 (ID: 0x202)
-    //    TxHeader.Identifier = 0x202;
-    //    HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, TxData_To_CAN1);
-
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET);
-    uint8_t cmd = 0x02;
-    HAL_UART_Transmit_IT(&huart1, &cmd, 1);
-      
-    uint8_t data[1] = {0};
-    CDC_Transmit_FS(data, 1);
-    
-    HAL_Delay(10); // 延时 500ms
+    ota_poll_serial();
+#if USB_CDC_HEARTBEAT_ENABLE
+    static uint32_t last_heartbeat_tick = 0;
+    uint32_t now_tick = HAL_GetTick();
+    if ((now_tick - last_heartbeat_tick) >= 1000U) {
+      static uint8_t heartbeat_msg[] = "SMOTA_STM32G0_CDC_OK\r\n";
+      if (CDC_Transmit_FS(heartbeat_msg, (uint16_t)(sizeof(heartbeat_msg) - 1U)) == USBD_OK) {
+        last_heartbeat_tick = now_tick;
+      }
+    }
+#endif
+    HAL_Delay(1);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -514,6 +539,245 @@ static void MX_GPIO_Init(void) {
 }
 
 /* USER CODE BEGIN 4 */
+static void ota_reset_transfer(void) {
+  g_ota_ctx.firmware_size = 0;
+  g_ota_ctx.received_size = 0;
+  g_ota_ctx.handshake_done = 0;
+  g_ota_ctx.header_done = 0;
+  g_ota_ctx.transfer_complete = 0;
+}
+
+static int ota_send_response(uint8_t cmd, const void *payload, uint16_t payload_len) {
+  int frame_len = smota_frame_build(cmd, (const uint8_t *)payload, payload_len, g_ota_tx_frame, sizeof(g_ota_tx_frame));
+  uint32_t start_tick = HAL_GetTick();
+  uint8_t ret;
+
+  if (frame_len <= 0) {
+    return -1;
+  }
+
+  do {
+    ret = CDC_Transmit_FS(g_ota_tx_frame, (uint16_t)frame_len);
+    if (ret == USBD_OK) {
+      return 0;
+    }
+    if (HAL_GetTick() - start_tick > 200U) {
+      return -2;
+    }
+  } while (ret == USBD_BUSY);
+
+  return -3;
+}
+
+static void ota_process_frame(const struct smota_frame *frame) {
+  if (frame == NULL) {
+    return;
+  }
+
+  switch (frame->header.cmd) {
+    case SMOTA_CMD_HANDSHAKE: {
+      struct smota_handshake_resp resp;
+      const struct smota_handshake_req *req;
+
+      if (frame->header.length < sizeof(struct smota_handshake_req)) {
+        return;
+      }
+
+      req = (const struct smota_handshake_req *)frame->payload;
+      g_ota_ctx.target_version[0] = req->fw_version_major;
+      g_ota_ctx.target_version[1] = req->fw_version_minor;
+      g_ota_ctx.target_version[2] = req->fw_version_patch;
+      g_ota_ctx.firmware_size = req->firmware_size;
+      g_ota_ctx.received_size = 0;
+      g_ota_ctx.handshake_done = 1;
+      g_ota_ctx.header_done = 0;
+      g_ota_ctx.transfer_complete = 0;
+
+      memset(&resp, 0, sizeof(resp));
+      resp.error_code = 0;
+      resp.next_offset = 0;
+      resp.max_packet_size = 256;
+      resp.mtu_size = 512;
+      resp.flash_free_size = OTA_FLASH_FREE_SIZE;
+      resp.block_timeout = req->block_timeout;
+      resp.install_timeout = req->install_timeout;
+      resp.capabilities = 0;
+      ota_send_response(SMOTA_CMD_HANDSHAKE_RESP, &resp, sizeof(resp));
+      break;
+    }
+
+    case SMOTA_CMD_HEADER_INFO: {
+      struct smota_header_info_resp resp;
+      memset(&resp, 0, sizeof(resp));
+
+      if (g_ota_ctx.handshake_done == 0) {
+        resp.error_code = SMOTA_ERR_FLASH_WRITE;
+      } else {
+        resp.error_code = 0;
+        g_ota_ctx.header_done = 1;
+        g_ota_ctx.transfer_complete = 0;
+      }
+      ota_send_response(SMOTA_CMD_HEADER_INFO_RESP, &resp, sizeof(resp));
+      break;
+    }
+
+    case SMOTA_CMD_DATA_BLOCK: {
+      struct smota_data_block_resp resp;
+      const struct smota_data_block_req *req;
+      uint32_t req_data_total;
+      memset(&resp, 0, sizeof(resp));
+
+      if (frame->header.length < sizeof(struct smota_data_block_req)) {
+        return;
+      }
+
+      req = (const struct smota_data_block_req *)frame->payload;
+      req_data_total = sizeof(struct smota_data_block_req) + req->length;
+
+      if (g_ota_ctx.header_done == 0 || g_ota_ctx.handshake_done == 0) {
+        resp.error_code = SMOTA_ERR_FLASH_WRITE;
+        resp.received_offset = g_ota_ctx.received_size;
+      } else if (frame->header.length < req_data_total) {
+        resp.error_code = SMOTA_ERR_FLASH_WRITE;
+        resp.received_offset = g_ota_ctx.received_size;
+      } else if (req->offset != g_ota_ctx.received_size) {
+        resp.error_code = SMOTA_ERR_FLASH_WRITE;
+        resp.received_offset = g_ota_ctx.received_size;
+      } else if ((req->offset + req->length) > g_ota_ctx.firmware_size) {
+        resp.error_code = SMOTA_ERR_FLASH_INSUFFICIENT;
+        resp.received_offset = g_ota_ctx.received_size;
+      } else {
+        g_ota_ctx.received_size += req->length;
+        resp.error_code = 0;
+        resp.received_offset = g_ota_ctx.received_size;
+      }
+
+      ota_send_response(SMOTA_CMD_DATA_BLOCK_RESP, &resp, sizeof(resp));
+      break;
+    }
+
+    case SMOTA_CMD_DATA_COMPLETE: {
+      struct smota_transfer_complete_resp resp;
+      const struct smota_transfer_complete_req *req;
+      memset(&resp, 0, sizeof(resp));
+
+      if (frame->header.length < sizeof(struct smota_transfer_complete_req)) {
+        return;
+      }
+
+      req = (const struct smota_transfer_complete_req *)frame->payload;
+      if (g_ota_ctx.header_done == 0 || g_ota_ctx.handshake_done == 0) {
+        resp.error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
+      } else if (req->total_size != g_ota_ctx.firmware_size) {
+        resp.error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
+      } else if (g_ota_ctx.received_size != g_ota_ctx.firmware_size) {
+        resp.error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
+      } else {
+        resp.error_code = 0;
+        g_ota_ctx.transfer_complete = 1;
+      }
+      ota_send_response(SMOTA_CMD_DATA_COMPLETE_RESP, &resp, sizeof(resp));
+      break;
+    }
+
+    case SMOTA_CMD_INSTALL: {
+      struct smota_install_resp resp;
+      memset(&resp, 0, sizeof(resp));
+
+      if (g_ota_ctx.transfer_complete == 0) {
+        resp.error_code = SMOTA_ERR_INSTALL_BUSY;
+        resp.estimated_time_s = 0;
+      } else {
+        resp.error_code = 0;
+        resp.estimated_time_s = 1;
+        memcpy(g_ota_ctx.current_version, g_ota_ctx.target_version, sizeof(g_ota_ctx.current_version));
+      }
+      ota_send_response(SMOTA_CMD_INSTALL_RESP, &resp, sizeof(resp));
+      break;
+    }
+
+    case SMOTA_CMD_ACTIVATE_CHECK: {
+      struct smota_activate_check_resp resp;
+      memset(&resp, 0, sizeof(resp));
+      resp.error_code = 0;
+      resp.fw_version_major = g_ota_ctx.current_version[0];
+      resp.fw_version_minor = g_ota_ctx.current_version[1];
+      resp.fw_version_patch = g_ota_ctx.current_version[2];
+      ota_send_response(SMOTA_CMD_ACTIVATE_CHECK_RESP, &resp, sizeof(resp));
+      break;
+    }
+
+    case SMOTA_CMD_QUERY_VERSION: {
+      struct smota_query_version_resp resp;
+      memset(&resp, 0, sizeof(resp));
+      resp.error_code = 0;
+      resp.fw_version_major = g_ota_ctx.current_version[0];
+      resp.fw_version_minor = g_ota_ctx.current_version[1];
+      resp.fw_version_patch = g_ota_ctx.current_version[2];
+      ota_send_response(SMOTA_CMD_QUERY_VERSION_RESP, &resp, sizeof(resp));
+      break;
+    }
+
+    default:
+      break;
+  }
+}
+
+static void ota_poll_serial(void) {
+  uint8_t read_buffer[64];
+  uint32_t read_len = 0;
+
+  if (read_len > 0) {
+    if (g_ota_rx_len + read_len > sizeof(g_ota_rx_cache)) {
+      g_ota_rx_len = 0;
+    }
+    memcpy(g_ota_rx_cache + g_ota_rx_len, read_buffer, read_len);
+    g_ota_rx_len += read_len;
+  }
+
+  while (g_ota_rx_len >= (SMOTA_FRAME_HEADER_SIZE + 2U)) {
+    struct smota_frame_header *header = (struct smota_frame_header *)g_ota_rx_cache;
+    struct smota_frame frame;
+    smota_err_t parse_ret;
+    int sof_offset = smota_find_sof(g_ota_rx_cache, (uint16_t)g_ota_rx_len);
+    uint32_t frame_len;
+
+    if (sof_offset < 0) {
+      g_ota_rx_len = 0;
+      break;
+    }
+
+    if (sof_offset > 0) {
+      g_ota_rx_len -= (uint32_t)sof_offset;
+      memmove(g_ota_rx_cache, g_ota_rx_cache + sof_offset, g_ota_rx_len);
+      continue;
+    }
+
+    frame_len = (uint32_t)SMOTA_FRAME_HEADER_SIZE + (uint32_t)header->length + 2U;
+    if (frame_len > sizeof(g_ota_rx_cache)) {
+      g_ota_rx_len = 0;
+      break;
+    }
+
+    if (g_ota_rx_len < frame_len) {
+      break;
+    }
+
+    parse_ret = smota_frame_parse(g_ota_rx_cache, (uint16_t)frame_len, &frame);
+    if (parse_ret != SMOTA_ERR_OK) {
+      g_ota_rx_len -= 1U;
+      memmove(g_ota_rx_cache, g_ota_rx_cache + 1, g_ota_rx_len);
+      continue;
+    }
+
+    ota_process_frame(&frame);
+    g_ota_rx_len -= frame_len;
+    if (g_ota_rx_len > 0) {
+      memmove(g_ota_rx_cache, g_ota_rx_cache + frame_len, g_ota_rx_len);
+    }
+  }
+}
+
 /**
  * @brief FDCAN 中断回调函数
  */

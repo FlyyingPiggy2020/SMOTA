@@ -9,6 +9,7 @@ from typing import Callable
 
 from .protocol import (
     ACTIVATE_CHECK_REQ,
+    QUERY_VERSION_REQ,
     CMD_ACTIVATE_CHECK,
     CMD_ACTIVATE_CHECK_RESP,
     CMD_DATA_BLOCK,
@@ -21,17 +22,22 @@ from .protocol import (
     CMD_HEADER_INFO_RESP,
     CMD_INSTALL,
     CMD_INSTALL_RESP,
+    CMD_QUERY_VERSION,
+    CMD_QUERY_VERSION_RESP,
     DATA_BLOCK_REQ,
     DATA_BLOCK_RESP,
     HANDSHAKE_REQ,
     HEADER_INFO_REQ,
     INSTALL_REQ,
     INSTALL_RESP,
+    SmotaSerialClient,
     SmotaTcpClient,
     TRANSFER_COMPLETE_REQ,
     TRANSFER_COMPLETE_RESP,
+    compare_version,
     decode_activate_check,
     decode_handshake,
+    decode_query_version,
     format_version,
     read_firmware,
 )
@@ -47,8 +53,11 @@ class UpgradeConfig:
     firmware_path: Path
     version: tuple[int, int, int]
     project_id: str
+    transport: str
     host: str
     port: int
+    serial_port: str
+    serial_baudrate: int
     timeout_s: float
     connect_timeout_s: float
     chunk_size: int
@@ -78,26 +87,57 @@ class UpgradeSession:
         self._stop_event.set()
 
     def run(self) -> None:
-        firmware = read_firmware(self.config.firmware_path)
-        firmware_hash = hashlib.sha256(firmware).digest()
         project_id = self.config.project_id.encode("utf-8")[:16].ljust(16, b"\x00")
-        client = SmotaTcpClient(
-            host=self.config.host,
-            port=self.config.port,
-            timeout=self.config.timeout_s,
-            logger=self.logger,
-        )
+        if self.config.transport == "serial":
+            client = SmotaSerialClient(
+                port=self.config.serial_port,
+                baudrate=self.config.serial_baudrate,
+                timeout=self.config.timeout_s,
+                logger=self.logger,
+            )
+            self.logger("INFO", f"transport=serial port={self.config.serial_port} baud={self.config.serial_baudrate}")
+        else:
+            client = SmotaTcpClient(
+                host=self.config.host,
+                port=self.config.port,
+                timeout=self.config.timeout_s,
+                logger=self.logger,
+            )
+            self.logger("INFO", f"transport=tcp endpoint={self.config.host}:{self.config.port}")
 
-        self.logger("INFO", f"firmware={self.config.firmware_path}")
-        self.logger("INFO", f"firmware size={len(firmware)} bytes")
         self.logger("INFO", f"target version={format_version(self.config.version)}")
-        self.logger("INFO", f"sha256={firmware_hash.hex()}")
         self.progress(0)
 
         try:
             self.status("Connecting")
             self._connect_with_retry(client, self.config.connect_timeout_s)
             self._ensure_not_stopped()
+
+            self.status("Query Version")
+            running_version = self._query_running_version(client)
+            self.logger("INFO", f"running version={format_version(running_version)}")
+
+            compare_result = compare_version(running_version, self.config.version)
+            if not self.config.force_install:
+                if compare_result == 0:
+                    self.logger("INFO", "running version already matches target, skip download")
+                    self.status("Skipped")
+                    self.progress(100)
+                    return
+                if compare_result > 0:
+                    raise RuntimeError(
+                        "running version is newer than target: "
+                        f"{format_version(running_version)} > {format_version(self.config.version)}; "
+                        "enable Force Install to continue"
+                    )
+            else:
+                self.logger("INFO", "force install enabled, continue upgrade flow")
+
+            firmware = read_firmware(self.config.firmware_path)
+            firmware_hash = hashlib.sha256(firmware).digest()
+            self.logger("INFO", f"firmware={self.config.firmware_path}")
+            self.logger("INFO", f"firmware size={len(firmware)} bytes")
+            self.logger("INFO", f"sha256={firmware_hash.hex()}")
 
             self.status("Handshake")
             handshake_frame = client.exchange(
@@ -217,7 +257,7 @@ class UpgradeSession:
         finally:
             client.close()
 
-    def _connect_with_retry(self, client: SmotaTcpClient, timeout_s: float) -> None:
+    def _connect_with_retry(self, client: SmotaTcpClient | SmotaSerialClient, timeout_s: float) -> None:
         deadline = time.time() + timeout_s
         last_error: Exception | None = None
 
@@ -226,13 +266,37 @@ class UpgradeSession:
             try:
                 client.connect()
                 return
-            except OSError as exc:
+            except Exception as exc:
                 last_error = exc
                 time.sleep(0.2)
 
         if last_error is None:
             raise TimeoutError("connect timeout")
         raise TimeoutError(f"connect timeout: {last_error}") from last_error
+
+    def _query_running_version(self, client: SmotaTcpClient | SmotaSerialClient) -> tuple[int, int, int]:
+        try:
+            frame = client.exchange(
+                CMD_QUERY_VERSION,
+                CMD_QUERY_VERSION_RESP,
+                QUERY_VERSION_REQ.pack(0),
+            )
+            response = decode_query_version(frame.payload)
+            if response.error_code != 0:
+                raise RuntimeError(f"query version failed: 0x{response.error_code:08X}")
+            return response.version
+        except Exception as exc:
+            self.logger("INFO", f"query version 0x07 unavailable, fallback to activate check: {exc}")
+
+        frame = client.exchange(
+            CMD_ACTIVATE_CHECK,
+            CMD_ACTIVATE_CHECK_RESP,
+            ACTIVATE_CHECK_REQ.pack(0),
+        )
+        response = decode_activate_check(frame.payload)
+        if response.error_code != 0:
+            raise RuntimeError(f"activate check query failed: 0x{response.error_code:08X}")
+        return response.version
 
     def _ensure_not_stopped(self) -> None:
         if self._stop_event.is_set():

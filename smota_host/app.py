@@ -6,7 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .protocol import parse_version
+from .protocol import list_serial_ports, parse_version
 from .session import UpgradeConfig, UpgradeSession
 
 
@@ -19,8 +19,11 @@ class HostApp:
         self.firmware_path = tk.StringVar(value=str(Path("examples/win_sim/README.md").resolve()))
         self.version = tk.StringVar(value="1.2.3")
         self.project_id = tk.StringVar(value="SMOTA_WIN_SIM")
+        self.transport = tk.StringVar(value="tcp")
         self.host = tk.StringVar(value="127.0.0.1")
         self.port = tk.StringVar(value="8888")
+        self.serial_port = tk.StringVar(value="")
+        self.serial_baudrate = tk.StringVar(value="115200")
         self.chunk_size = tk.StringVar(value="128")
         self.timeout_s = tk.StringVar(value="3.0")
         self.connect_timeout_s = tk.StringVar(value="8.0")
@@ -36,6 +39,11 @@ class HostApp:
         self.event_queue: queue.Queue[tuple[str, str, object]] = queue.Queue()
         self.worker: threading.Thread | None = None
         self.session: UpgradeSession | None = None
+
+        ports = list_serial_ports()
+        if ports:
+            self.serial_port.set(ports[0])
+            self.transport.set("serial")
 
         self._build_ui()
         self.root.after(100, self._process_events)
@@ -63,28 +71,34 @@ class HostApp:
 
         self._add_entry(config_frame, "Version", self.version, 0, 0)
         self._add_entry(config_frame, "Project ID", self.project_id, 0, 2)
-        self._add_entry(config_frame, "Host", self.host, 0, 4)
-        self._add_entry(config_frame, "Port", self.port, 1, 0)
-        self._add_entry(config_frame, "Chunk Size", self.chunk_size, 1, 2)
-        self._add_entry(config_frame, "Socket Timeout(s)", self.timeout_s, 1, 4)
-        self._add_entry(config_frame, "Connect Timeout(s)", self.connect_timeout_s, 2, 0)
-        self._add_entry(config_frame, "Block Timeout(ms)", self.block_timeout_ms, 2, 2)
-        self._add_entry(config_frame, "Check Timeout(ms)", self.check_timeout_ms, 2, 4)
-        self._add_entry(config_frame, "Install Timeout(ms)", self.install_timeout_ms, 3, 0)
-        self._add_entry(config_frame, "Total Timeout(ms)", self.total_timeout_ms, 3, 2)
+        self._add_combo(config_frame, "Transport", self.transport, ["tcp", "serial"], 0, 4)
+        self._add_entry(config_frame, "Host", self.host, 1, 0)
+        self._add_entry(config_frame, "Port", self.port, 1, 2)
+        self._add_entry(config_frame, "Chunk Size", self.chunk_size, 1, 4)
+        self._add_entry(config_frame, "Serial Port", self.serial_port, 2, 0)
+        self._add_entry(config_frame, "Serial Baud", self.serial_baudrate, 2, 2)
+        ttk.Button(config_frame, text="Refresh COM", command=self._refresh_serial_ports).grid(
+            row=2, column=4, padx=8, pady=8, sticky="ew"
+        )
+        self._add_entry(config_frame, "Socket Timeout(s)", self.timeout_s, 3, 0)
+        self._add_entry(config_frame, "Connect Timeout(s)", self.connect_timeout_s, 3, 2)
+        self._add_entry(config_frame, "Block Timeout(ms)", self.block_timeout_ms, 3, 4)
+        self._add_entry(config_frame, "Check Timeout(ms)", self.check_timeout_ms, 4, 0)
+        self._add_entry(config_frame, "Install Timeout(ms)", self.install_timeout_ms, 4, 2)
+        self._add_entry(config_frame, "Total Timeout(ms)", self.total_timeout_ms, 4, 4)
 
         ttk.Checkbutton(config_frame, text="Force Install", variable=self.force_install).grid(
-            row=3, column=4, padx=8, pady=8, sticky="w"
+            row=5, column=0, padx=8, pady=8, sticky="w"
         )
         ttk.Checkbutton(config_frame, text="Activate Check", variable=self.activate_check).grid(
-            row=4, column=4, padx=8, pady=8, sticky="w"
+            row=5, column=2, padx=8, pady=8, sticky="w"
         )
 
         action_frame = ttk.Frame(self.root)
         action_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=6)
         action_frame.columnconfigure(3, weight=1)
 
-        self.start_button = ttk.Button(action_frame, text="Start Upgrade", command=self._start_upgrade)
+        self.start_button = ttk.Button(action_frame, text="Connect And Upgrade", command=self._start_upgrade)
         self.start_button.grid(row=0, column=0, padx=(0, 8), pady=4)
         self.stop_button = ttk.Button(action_frame, text="Stop", command=self._stop_upgrade, state="disabled")
         self.stop_button.grid(row=0, column=1, padx=8, pady=4)
@@ -114,6 +128,20 @@ class HostApp:
         ttk.Label(parent, text=label).grid(row=row, column=column, padx=8, pady=8, sticky="w")
         ttk.Entry(parent, textvariable=variable).grid(row=row, column=column + 1, padx=8, pady=8, sticky="ew")
 
+    def _add_combo(
+        self,
+        parent: ttk.LabelFrame,
+        label: str,
+        variable: tk.StringVar,
+        values: list[str],
+        row: int,
+        column: int,
+    ) -> None:
+        ttk.Label(parent, text=label).grid(row=row, column=column, padx=8, pady=8, sticky="w")
+        ttk.Combobox(parent, textvariable=variable, values=values, state="readonly").grid(
+            row=row, column=column + 1, padx=8, pady=8, sticky="ew"
+        )
+
     def _browse_firmware(self) -> None:
         filename = filedialog.askopenfilename(
             title="Select firmware file",
@@ -127,12 +155,19 @@ class HostApp:
             return
 
         try:
+            transport = self.transport.get().strip().lower() or "tcp"
+            if transport not in ("tcp", "serial"):
+                raise ValueError("transport must be tcp or serial")
+
             config = UpgradeConfig(
                 firmware_path=Path(self.firmware_path.get()).expanduser().resolve(),
                 version=parse_version(self.version.get()),
                 project_id=self.project_id.get().strip() or "SMOTA_WIN_SIM",
+                transport=transport,
                 host=self.host.get().strip(),
                 port=int(self.port.get()),
+                serial_port=self.serial_port.get().strip(),
+                serial_baudrate=int(self.serial_baudrate.get()),
                 timeout_s=float(self.timeout_s.get()),
                 connect_timeout_s=float(self.connect_timeout_s.get()),
                 chunk_size=int(self.chunk_size.get()),
@@ -147,12 +182,16 @@ class HostApp:
             messagebox.showerror("Invalid Input", str(exc))
             return
 
+        if config.transport == "serial" and not config.serial_port:
+            messagebox.showerror("Serial Missing", "serial port can not be empty")
+            return
+
         if not config.firmware_path.exists():
             messagebox.showerror("Firmware Missing", f"file not found: {config.firmware_path}")
             return
 
         self.progress.set(0)
-        self._append_log("INFO", "starting upgrade session")
+        self._append_log("INFO", "starting connect/version-check/upgrade session")
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
 
@@ -164,6 +203,15 @@ class HostApp:
         )
         self.worker = threading.Thread(target=self._run_worker, daemon=True)
         self.worker.start()
+
+    def _refresh_serial_ports(self) -> None:
+        ports = list_serial_ports()
+        if not ports:
+            messagebox.showwarning("Serial Ports", "no serial ports found")
+            return
+        if self.serial_port.get().strip() not in ports:
+            self.serial_port.set(ports[0])
+        messagebox.showinfo("Serial Ports", ", ".join(ports))
 
     def _run_worker(self) -> None:
         assert self.session is not None

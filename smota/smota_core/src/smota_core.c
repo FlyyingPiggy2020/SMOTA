@@ -160,6 +160,7 @@ smota_err_t smota_poll(void)
     struct smota_transfer_complete_resp complete_resp;
     struct smota_install_resp install_resp;
     struct smota_activate_check_resp activate_resp;
+    struct smota_query_version_resp query_version_resp;
     uint8_t resp_buffer[256];
     int resp_len;
     int recv_len;
@@ -311,6 +312,23 @@ smota_err_t smota_poll(void)
                                     SMOTA_CMD_ACTIVATE_CHECK_RESP,
                                     (uint8_t *)&activate_resp,
                                     sizeof(activate_resp),
+                                    resp_buffer,
+                                    sizeof(resp_buffer));
+                                if (resp_len > 0 && g_hal->comm->send != NULL) {
+                                    g_hal->comm->send(resp_buffer, resp_len);
+                                }
+                            }
+                            break;
+
+                        case SMOTA_CMD_QUERY_VERSION:
+                            ret = smota_handle_query_version_req(
+                                (struct smota_query_version_req *)frame.payload,
+                                &query_version_resp);
+                            if (ret == SMOTA_ERR_OK) {
+                                resp_len = smota_frame_build(
+                                    SMOTA_CMD_QUERY_VERSION_RESP,
+                                    (uint8_t *)&query_version_resp,
+                                    sizeof(query_version_resp),
                                     resp_buffer,
                                     sizeof(resp_buffer));
                                 if (resp_len > 0 && g_hal->comm->send != NULL) {

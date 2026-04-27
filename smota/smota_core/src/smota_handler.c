@@ -362,4 +362,30 @@ smota_err_t smota_handle_activate_check_req(const struct smota_activate_check_re
     return SMOTA_ERR_OK;
 }
 
+/**
+ * @brief       处理固件版本查询请求 (0x07)
+ * @param[in]   req: 固件版本查询请求结构体
+ * @param[out]  resp: 固件版本查询响应结构体
+ * @return      smota_err_t 错误码
+ */
+smota_err_t smota_handle_query_version_req(const struct smota_query_version_req *req,
+                                           struct smota_query_version_resp *resp)
+{
+    struct smota_ctx *ctx;
+
+    if (resp == NULL) {
+        return SMOTA_ERR_INVALID_PARAM;
+    }
+
+    (void)req;
+    ctx = smota_ctx_get();
+
+    resp->error_code = 0;
+    resp->fw_version_major = ctx->current_version[0];
+    resp->fw_version_minor = ctx->current_version[1];
+    resp->fw_version_patch = ctx->current_version[2];
+
+    return SMOTA_ERR_OK;
+}
+
 /*---------- end of file ----------*/

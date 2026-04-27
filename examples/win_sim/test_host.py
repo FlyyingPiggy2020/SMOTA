@@ -35,6 +35,7 @@ CMD_DATA_BLOCK = 0x03
 CMD_DATA_COMPLETE = 0x04
 CMD_INSTALL = 0x05
 CMD_ACTIVATE_CHECK = 0x06
+CMD_QUERY_VERSION = 0x07
 
 CMD_HANDSHAKE_RESP = 0x81
 CMD_HEADER_INFO_RESP = 0x82
@@ -42,6 +43,7 @@ CMD_DATA_BLOCK_RESP = 0x83
 CMD_DATA_COMPLETE_RESP = 0x84
 CMD_INSTALL_RESP = 0x85
 CMD_ACTIVATE_CHECK_RESP = 0x86
+CMD_QUERY_VERSION_RESP = 0x87
 
 HANDSHAKE_REQ = struct.Struct("<BBBI16sHHHI")
 HANDSHAKE_RESP = struct.Struct("<IIHHIHHB")
@@ -54,6 +56,8 @@ INSTALL_REQ = struct.Struct("<B15s")
 INSTALL_RESP = struct.Struct("<IH")
 ACTIVATE_CHECK_REQ = struct.Struct("<I")
 ACTIVATE_CHECK_RESP = struct.Struct("<IBBB")
+QUERY_VERSION_REQ = struct.Struct("<I")
+QUERY_VERSION_RESP = struct.Struct("<IBBB")
 
 
 def crc16_ccitt(data: bytes) -> int:
@@ -84,6 +88,14 @@ def parse_version(text: str) -> tuple[int, int, int]:
 
 def format_version(version: tuple[int, int, int]) -> str:
     return f"{version[0]}.{version[1]}.{version[2]}"
+
+
+def compare_version(left: tuple[int, int, int], right: tuple[int, int, int]) -> int:
+    if left > right:
+        return 1
+    if left < right:
+        return -1
+    return 0
 
 
 @dataclass
@@ -248,10 +260,18 @@ def decode_handshake(payload: bytes) -> HandshakeResponseData:
     return HandshakeResponseData(*unpacked)
 
 
+def decode_version_payload(payload: bytes) -> tuple[int, tuple[int, int, int]]:
+    error_code, major, minor, patch = QUERY_VERSION_RESP.unpack(payload)
+    return error_code, (major, minor, patch)
+
+
+def decode_activate_payload(payload: bytes) -> tuple[int, tuple[int, int, int]]:
+    error_code, major, minor, patch = ACTIVATE_CHECK_RESP.unpack(payload)
+    return error_code, (major, minor, patch)
+
+
 def run_upgrade(args: argparse.Namespace) -> int:
     firmware_path = Path(args.firmware).resolve()
-    firmware = firmware_path.read_bytes()
-    firmware_hash = hashlib.sha256(firmware).digest()
     version = args.version
     project_id = args.project_id.encode("utf-8")[:16].ljust(16, b"\x00")
 
@@ -269,6 +289,40 @@ def run_upgrade(args: argparse.Namespace) -> int:
     try:
         client.connect_with_retry(args.connect_timeout)
         print(f"Connected to {args.host}:{args.port}")
+
+        try:
+            version_frame = client.exchange(
+                CMD_QUERY_VERSION,
+                CMD_QUERY_VERSION_RESP,
+                QUERY_VERSION_REQ.pack(0),
+            )
+            version_error, running_version = decode_version_payload(version_frame.payload)
+            if version_error != 0:
+                raise RuntimeError(f"query version failed with error code 0x{version_error:08X}")
+        except Exception:
+            version_frame = client.exchange(
+                CMD_ACTIVATE_CHECK,
+                CMD_ACTIVATE_CHECK_RESP,
+                ACTIVATE_CHECK_REQ.pack(0),
+            )
+            version_error, running_version = decode_activate_payload(version_frame.payload)
+            if version_error != 0:
+                raise RuntimeError(f"activate check query failed with error code 0x{version_error:08X}")
+
+        print(f"Running version: {format_version(running_version)}")
+        version_cmp = compare_version(running_version, version)
+        if not args.force_install:
+            if version_cmp == 0:
+                print("Running version matches target, skip download")
+                return 0
+            if version_cmp > 0:
+                raise RuntimeError(
+                    f"running version {format_version(running_version)} is newer than target "
+                    f"{format_version(version)}, use --force-install to continue"
+                )
+
+        firmware = firmware_path.read_bytes()
+        firmware_hash = hashlib.sha256(firmware).digest()
 
         handshake_payload = HANDSHAKE_REQ.pack(
             version[0],

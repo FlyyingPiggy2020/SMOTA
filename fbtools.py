@@ -10,7 +10,7 @@ from tools.scripts.before_build import _run_before_operations
 
 # 你的 Keil 安装路径 (注意: 路径里如果反斜杠，建议前面加 r 或者用双反斜杠 \\)
 my_keil = r"C:\Users\w1545\AppData\Local\Keil_v5\UV4\UV4.exe" 
-my_project = os.path.dirname(os.path.abspath(__file__)) + r"\board\polcd-stm32g0b1rct6\.mdk\mdk.uvprojx"
+my_project = os.path.dirname(os.path.abspath(__file__)) + r"\examples\stm32g0\MDK-ARM\STM32G0B1.uvprojx"
 log_path = os.path.dirname(os.path.abspath(__file__)) + r"\build"
 
 def run_before_operations():
