@@ -27,9 +27,10 @@ def cli():
 @cli.command()
 def build():
     """这是编译命令"""
-
+    run_before_operations()
     # 1.编译MDK工程
-    result = build_mdk_project(my_keil, my_project, log_path, "build")
+    build_mdk_project(my_keil, my_project, log_path, "build")
+    run_after_operations()
     
 
 @cli.command()

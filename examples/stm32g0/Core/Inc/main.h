@@ -57,20 +57,6 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define ENCODER_TX_Pin GPIO_PIN_2
-#define ENCODER_TX_GPIO_Port GPIOA
-#define ENCODER_RX_Pin GPIO_PIN_3
-#define ENCODER_RX_GPIO_Port GPIOA
-#define TORQUE_SENSOR_TX_Pin GPIO_PIN_4
-#define TORQUE_SENSOR_TX_GPIO_Port GPIOC
-#define TORQUE_SENSOR_RX_Pin GPIO_PIN_5
-#define TORQUE_SENSOR_RX_GPIO_Port GPIOC
-#define DEBUG_TX_Pin GPIO_PIN_8
-#define DEBUG_TX_GPIO_Port GPIOD
-#define DEBUG_RX_Pin GPIO_PIN_9
-#define DEBUG_RX_GPIO_Port GPIOD
-#define SPI2_NSS_Pin GPIO_PIN_4
-#define SPI2_NSS_GPIO_Port GPIOD
 
 /* USER CODE BEGIN Private defines */
 

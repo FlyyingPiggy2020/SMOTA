@@ -67,3 +67,4 @@ boards/*/.mdk/*
 !boards/*/.mdk/README.md
 !boards/*/boot/*.hex
 .roo/mcp.json
+*.crf

@@ -52,10 +52,6 @@ void SVC_Handler(void);
 void PendSV_Handler(void);
 void SysTick_Handler(void);
 void USB_UCPD1_2_IRQHandler(void);
-void TIM16_FDCAN_IT0_IRQHandler(void);
-void USART1_IRQHandler(void);
-void USART2_LPUART2_IRQHandler(void);
-void USART3_4_5_6_LPUART1_IRQHandler(void);
 /* USER CODE BEGIN EFP */
 
 /* USER CODE END EFP */
