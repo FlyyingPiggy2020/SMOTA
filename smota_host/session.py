@@ -42,6 +42,9 @@ from .protocol import (
 LogFn = Callable[[str, str], None]
 ProgressFn = Callable[[int], None]
 StatusFn = Callable[[str], None]
+DeviceInfoFn = Callable[[tuple[int, int, int], str], None]
+BOOT_PROJECT_ID = "SMOTA_BOOT"
+EMPTY_BOOT_VERSION = (0, 0, 0)
 
 
 @dataclass(frozen=True)
@@ -71,11 +74,13 @@ class UpgradeSession:
         logger: LogFn,
         progress: ProgressFn,
         status: StatusFn,
+        device_info: DeviceInfoFn | None = None,
     ) -> None:
         self.config = config
         self.logger = logger
         self.progress = progress
         self.status = status
+        self.device_info = device_info
         self._stop_event = threading.Event()
 
     def request_stop(self) -> None:
@@ -103,8 +108,8 @@ class UpgradeSession:
             )
             self.logger("INFO", f"传输方式=TCP 地址={self.config.host}:{self.config.port}")
 
-        self.logger("INFO", f"目标版本={format_version(target_version)}")
-        self.logger("INFO", f"项目名称ID={package.manifest.project_id}")
+        self.logger("INFO", f"固件版本={format_version(target_version)}")
+        self.logger("INFO", f"固件ID={package.manifest.project_id}")
         self.logger("INFO", f"OTA文件={package.path}")
         self.logger("INFO", f"容器固件={package.manifest.firmware_name}")
         self.progress(0)
@@ -115,8 +120,12 @@ class UpgradeSession:
             self._ensure_not_stopped()
 
             self.status("读取版本")
-            running_version = self._query_running_version(client)
+            running_info = self._query_running_version(client)
+            running_version = running_info.version
             self.logger("INFO", f"当前运行版本={format_version(running_version)}")
+            self.logger("INFO", f"当前设备ID={running_info.project_id}")
+            if self.device_info is not None:
+                self.device_info(running_info.version, running_info.project_id)
 
             compare_result = compare_version(running_version, target_version)
             if not self.config.force_install:
@@ -140,24 +149,13 @@ class UpgradeSession:
             self.logger("INFO", f"sha256={firmware_hash.hex()}")
 
             self.status("握手中")
-            handshake_frame = client.exchange(
-                CMD_HANDSHAKE,
-                CMD_HANDSHAKE_RESP,
-                HANDSHAKE_REQ.pack(
-                    target_version[0],
-                    target_version[1],
-                    target_version[2],
-                    len(firmware),
-                    project_id,
-                    self.config.block_timeout_ms,
-                    self.config.check_timeout_ms,
-                    self.config.install_timeout_ms,
-                    self.config.total_timeout_ms,
-                ),
+            handshake = self._handshake(
+                client=client,
+                target_version=target_version,
+                firmware_size=len(firmware),
+                project_id=project_id,
+                running_version=running_version,
             )
-            handshake = decode_handshake(handshake_frame.payload)
-            if handshake.error_code != 0:
-                raise RuntimeError(f"握手失败：0x{handshake.error_code:08X}")
 
             self.logger(
                 "INFO",
@@ -237,14 +235,16 @@ class UpgradeSession:
 
             self.status("激活校验")
             activate = self._query_running_version(client)
-            if activate != target_version:
+            if self.device_info is not None:
+                self.device_info(activate.version, activate.project_id)
+            if activate.version != target_version:
                 raise RuntimeError(
                     "激活校验版本不一致："
-                    f"当前运行 {format_version(activate)}，"
+                    f"当前运行 {format_version(activate.version)}，"
                     f"期望版本 {format_version(target_version)}"
                 )
 
-            self.logger("INFO", f"激活校验成功，当前运行版本 {format_version(activate)}")
+            self.logger("INFO", f"激活校验成功，当前运行版本 {format_version(activate.version)}")
             self.status("已完成")
             self.progress(100)
         finally:
@@ -268,7 +268,7 @@ class UpgradeSession:
             raise TimeoutError("连接超时")
         raise TimeoutError(f"连接超时：{last_error}") from last_error
 
-    def _query_running_version(self, client: SmotaTcpClient | SmotaSerialClient) -> tuple[int, int, int]:
+    def _query_running_version(self, client: SmotaTcpClient | SmotaSerialClient):
         self.logger("INFO", "准备查询设备当前运行版本")
         frame = client.exchange(
             CMD_QUERY_VERSION,
@@ -278,7 +278,53 @@ class UpgradeSession:
         response = decode_query_version(frame.payload)
         if response.error_code != 0:
             raise RuntimeError(f"读取版本失败：0x{response.error_code:08X}")
-        return response.version
+        return response
+
+    def _handshake(
+        self,
+        client: SmotaTcpClient | SmotaSerialClient,
+        target_version: tuple[int, int, int],
+        firmware_size: int,
+        project_id: bytes,
+        running_version: tuple[int, int, int],
+    ):
+        if running_version == EMPTY_BOOT_VERSION:
+            self.logger("INFO", "检测到空 Boot，使用 SMOTA_BOOT 兼容握手")
+            boot_project_id = BOOT_PROJECT_ID.encode("utf-8")[:16].ljust(16, b"\x00")
+            handshake = self._send_handshake(client, target_version, firmware_size, boot_project_id)
+            if handshake.error_code != 0:
+                raise RuntimeError(f"握手失败：0x{handshake.error_code:08X}")
+            return handshake
+
+        handshake = self._send_handshake(client, target_version, firmware_size, project_id)
+        if handshake.error_code == 0:
+            return handshake
+
+        raise RuntimeError(f"握手失败：0x{handshake.error_code:08X}")
+
+    def _send_handshake(
+        self,
+        client: SmotaTcpClient | SmotaSerialClient,
+        target_version: tuple[int, int, int],
+        firmware_size: int,
+        project_id: bytes,
+    ):
+        handshake_frame = client.exchange(
+            CMD_HANDSHAKE,
+            CMD_HANDSHAKE_RESP,
+            HANDSHAKE_REQ.pack(
+                target_version[0],
+                target_version[1],
+                target_version[2],
+                firmware_size,
+                project_id,
+                self.config.block_timeout_ms,
+                self.config.check_timeout_ms,
+                self.config.install_timeout_ms,
+                self.config.total_timeout_ms,
+            ),
+        )
+        return decode_handshake(handshake_frame.payload)
 
     def _ensure_not_stopped(self) -> None:
         if self._stop_event.is_set():

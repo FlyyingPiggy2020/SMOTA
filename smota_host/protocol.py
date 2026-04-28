@@ -48,7 +48,7 @@ TRANSFER_COMPLETE_RESP = struct.Struct("<I")
 INSTALL_REQ = struct.Struct("<B15s")
 INSTALL_RESP = struct.Struct("<IH")
 QUERY_VERSION_REQ = struct.Struct("<I")
-QUERY_VERSION_RESP = struct.Struct("<IBBB")
+QUERY_VERSION_RESP = struct.Struct("<IBBB16s")
 
 CMD_NAMES = {
     CMD_HANDSHAKE: "HANDSHAKE",
@@ -89,6 +89,7 @@ class HandshakeResponse:
 class QueryVersionResponse:
     error_code: int
     version: tuple[int, int, int]
+    project_id: str
 
 
 @dataclass(frozen=True)
@@ -349,8 +350,9 @@ def decode_handshake(payload: bytes) -> HandshakeResponse:
 
 
 def decode_query_version(payload: bytes) -> QueryVersionResponse:
-    error_code, major, minor, patch = QUERY_VERSION_RESP.unpack(payload)
-    return QueryVersionResponse(error_code=error_code, version=(major, minor, patch))
+    error_code, major, minor, patch, project_id_raw = QUERY_VERSION_RESP.unpack(payload)
+    project_id = project_id_raw.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
+    return QueryVersionResponse(error_code=error_code, version=(major, minor, patch), project_id=project_id)
 
 
 class SmotaTcpClient:

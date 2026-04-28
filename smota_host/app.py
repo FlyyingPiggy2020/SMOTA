@@ -19,6 +19,8 @@ class HostApp:
         self.firmware_path = tk.StringVar(value="")
         self.version = tk.StringVar(value="")
         self.project_id = tk.StringVar(value="")
+        self.device_version = tk.StringVar(value="")
+        self.device_project_id = tk.StringVar(value="")
         self.transport = tk.StringVar(value="tcp")
         self.host = tk.StringVar(value="127.0.0.1")
         self.port = tk.StringVar(value="8888")
@@ -75,22 +77,24 @@ class HostApp:
         for index in range(6):
             common_frame.columnconfigure(index, weight=1)
 
-        self._add_entry(common_frame, "目标版本", self.version, 0, 0, state="readonly")
-        self._add_entry(common_frame, "项目名称ID", self.project_id, 0, 2, state="readonly")
+        self._add_entry(common_frame, "固件版本", self.version, 0, 0, state="readonly")
+        self._add_entry(common_frame, "固件ID", self.project_id, 0, 2, state="readonly")
         self._add_combo(common_frame, "传输方式", self.transport, ["tcp", "serial"], 0, 4)
-        self._add_entry(common_frame, "分块大小", self.chunk_size, 1, 0)
-        self._add_entry(common_frame, "通信超时(s)", self.timeout_s, 1, 2)
-        self._add_entry(common_frame, "连接超时(s)", self.connect_timeout_s, 1, 4)
-        self._add_entry(common_frame, "分块超时(ms)", self.block_timeout_ms, 2, 0)
-        self._add_entry(common_frame, "校验超时(ms)", self.check_timeout_ms, 2, 2)
-        self._add_entry(common_frame, "安装超时(ms)", self.install_timeout_ms, 2, 4)
-        self._add_entry(common_frame, "总超时(ms)", self.total_timeout_ms, 3, 0)
+        self._add_entry(common_frame, "当前设备版本", self.device_version, 1, 0, state="readonly")
+        self._add_entry(common_frame, "当前设备ID", self.device_project_id, 1, 2, state="readonly")
+        self._add_entry(common_frame, "分块大小", self.chunk_size, 1, 4)
+        self._add_entry(common_frame, "通信超时(s)", self.timeout_s, 2, 0)
+        self._add_entry(common_frame, "连接超时(s)", self.connect_timeout_s, 2, 2)
+        self._add_entry(common_frame, "分块超时(ms)", self.block_timeout_ms, 2, 4)
+        self._add_entry(common_frame, "校验超时(ms)", self.check_timeout_ms, 3, 0)
+        self._add_entry(common_frame, "安装超时(ms)", self.install_timeout_ms, 3, 2)
+        self._add_entry(common_frame, "总超时(ms)", self.total_timeout_ms, 3, 4)
 
         ttk.Checkbutton(common_frame, text="强制安装", variable=self.force_install).grid(
-            row=3, column=2, padx=8, pady=8, sticky="w"
+            row=4, column=0, padx=8, pady=8, sticky="w"
         )
         ttk.Checkbutton(common_frame, text="激活校验", variable=self.activate_check).grid(
-            row=3, column=4, padx=8, pady=8, sticky="w"
+            row=4, column=2, padx=8, pady=8, sticky="w"
         )
 
         self.transport_frame = ttk.Frame(config_frame)
@@ -247,8 +251,8 @@ class HostApp:
                 "INFO",
                 "已加载 OTA 文件 "
                 f"{package.path.name}，"
-                f"目标版本 {format_version(package.manifest.version)}，"
-                f"项目名称ID {package.manifest.project_id}",
+                f"固件版本 {format_version(package.manifest.version)}，"
+                f"固件ID {package.manifest.project_id}",
             )
 
     def _on_transport_changed(self, *_args: object) -> None:
@@ -316,6 +320,8 @@ class HostApp:
 
         self.version.set(format_version(package.manifest.version))
         self.project_id.set(package.manifest.project_id)
+        self.device_version.set("")
+        self.device_project_id.set("")
 
         self.progress.set(0)
         self._append_log("INFO", "开始连接、版本检查和升级流程")
@@ -327,6 +333,9 @@ class HostApp:
             logger=lambda level, msg: self.event_queue.put(("log", level, msg)),
             progress=lambda value: self.event_queue.put(("progress", "", value)),
             status=lambda msg: self.event_queue.put(("status", "", msg)),
+            device_info=lambda version, project_id: self.event_queue.put(
+                ("device_info", "", (version, project_id))
+            ),
         )
         self.worker = threading.Thread(target=self._run_worker, daemon=True)
         self.worker.start()
@@ -379,6 +388,10 @@ class HostApp:
                 self.progress.set(int(payload))
             elif event == "status":
                 self.status.set(str(payload))
+            elif event == "device_info":
+                version, project_id = payload
+                self.device_version.set(format_version(version))
+                self.device_project_id.set(str(project_id))
             elif event == "done":
                 self._append_log(level, str(payload))
                 self.status.set("空闲" if level == "ERROR" else "已完成")

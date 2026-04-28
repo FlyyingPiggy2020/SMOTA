@@ -241,6 +241,7 @@ struct smota_query_version_resp {
     uint8_t fw_version_major; /* 当前运行的主版本号 */
     uint8_t fw_version_minor; /* 当前运行的次版本号 */
     uint8_t fw_version_patch; /* 当前运行的补丁版本号 */
+    uint8_t project_id[16];   /* 当前设备项目 ID */
 };
 
 #pragma pack(pop)

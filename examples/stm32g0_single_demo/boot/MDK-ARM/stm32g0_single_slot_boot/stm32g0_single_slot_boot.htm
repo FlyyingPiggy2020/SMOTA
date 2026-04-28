@@ -3,9 +3,9 @@
 <title>Static Call Graph - [stm32g0_single_slot_boot\\stm32g0_single_slot_boot.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image stm32g0_single_slot_boot\\stm32g0_single_slot_boot.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Tue Apr 28 15:58:45 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Tue Apr 28 17:02:09 2026
 <BR><P>
-<H3>Maximum Stack Usage =        452 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
+<H3>Maximum Stack Usage =        468 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
 __rt_entry_main &rArr; main &rArr; main_app_poll &rArr; smota_poll &rArr; smota_frame_build &rArr; smota_crc16_compute
 <P>
@@ -220,7 +220,7 @@ Global Symbols
 <P><STRONG><a name="[159]"></a>__rt_entry_postsh_1</STRONG> (Thumb, 0 bytes, Stack size unknown bytes, __rtentry2.o(.ARM.Collect$$rtentry$$00000009))
 
 <P><STRONG><a name="[5d]"></a>__rt_entry_main</STRONG> (Thumb, 0 bytes, Stack size unknown bytes, __rtentry2.o(.ARM.Collect$$rtentry$$0000000D))
-<BR><BR>[Stack]<UL><LI>Max Depth = 452 + Unknown Stack Size
+<BR><BR>[Stack]<UL><LI>Max Depth = 468 + Unknown Stack Size
 <LI>Call Chain = __rt_entry_main &rArr; main &rArr; main_app_poll &rArr; smota_poll &rArr; smota_frame_build &rArr; smota_crc16_compute
 </UL>
 <BR>[Calls]<UL><LI><a href="#[5e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main
@@ -370,6 +370,7 @@ Global Symbols
 <LI><a href="#[1d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;flash_read
 <LI><a href="#[132]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_port_load_running_project_id
 <LI><a href="#[136]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_port_set_default_project_id
+<LI><a href="#[123]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_handle_query_version_req
 <LI><a href="#[11a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_frame_parse
 <LI><a href="#[125]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_load_current_app_info
 </UL>
@@ -1654,7 +1655,7 @@ Global Symbols
 </UL>
 
 <P><STRONG><a name="[5e]"></a>main</STRONG> (Thumb, 32 bytes, Stack size 0 bytes, main.o(i.main))
-<BR><BR>[Stack]<UL><LI>Max Depth = 452<LI>Call Chain = main &rArr; main_app_poll &rArr; smota_poll &rArr; smota_frame_build &rArr; smota_crc16_compute
+<BR><BR>[Stack]<UL><LI>Max Depth = 468<LI>Call Chain = main &rArr; main_app_poll &rArr; smota_poll &rArr; smota_frame_build &rArr; smota_crc16_compute
 </UL>
 <BR>[Calls]<UL><LI><a href="#[cb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MX_USB_Device_Init
 <LI><a href="#[bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_PWREx_EnableVddUSB
@@ -1679,7 +1680,7 @@ Global Symbols
 </UL>
 
 <P><STRONG><a name="[111]"></a>main_app_poll</STRONG> (Thumb, 74 bytes, Stack size 8 bytes, main_app.o(i.main_app_poll))
-<BR><BR>[Stack]<UL><LI>Max Depth = 452<LI>Call Chain = main_app_poll &rArr; smota_poll &rArr; smota_frame_build &rArr; smota_crc16_compute
+<BR><BR>[Stack]<UL><LI>Max Depth = 468<LI>Call Chain = main_app_poll &rArr; smota_poll &rArr; smota_frame_build &rArr; smota_crc16_compute
 </UL>
 <BR>[Calls]<UL><LI><a href="#[117]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_port_jump_to_app
 <LI><a href="#[115]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_poll
@@ -1801,11 +1802,12 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[115]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_poll
 </UL>
 
-<P><STRONG><a name="[123]"></a>smota_handle_query_version_req</STRONG> (Thumb, 44 bytes, Stack size 16 bytes, smota_handler.o(i.smota_handle_query_version_req))
-<BR><BR>[Stack]<UL><LI>Max Depth = 16<LI>Call Chain = smota_handle_query_version_req
+<P><STRONG><a name="[123]"></a>smota_handle_query_version_req</STRONG> (Thumb, 56 bytes, Stack size 16 bytes, smota_handler.o(i.smota_handle_query_version_req))
+<BR><BR>[Stack]<UL><LI>Max Depth = 40<LI>Call Chain = smota_handle_query_version_req &rArr; __aeabi_memcpy
 </UL>
 <BR>[Calls]<UL><LI><a href="#[116]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_ctx_get
 <LI><a href="#[106]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_uwrite4
+<LI><a href="#[64]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__aeabi_memcpy
 </UL>
 <BR>[Called By]<UL><LI><a href="#[115]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_poll
 </UL>
@@ -1835,8 +1837,8 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[110]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main_app_init
 </UL>
 
-<P><STRONG><a name="[115]"></a>smota_poll</STRONG> (Thumb, 1184 bytes, Stack size 384 bytes, smota_core.o(i.smota_poll))
-<BR><BR>[Stack]<UL><LI>Max Depth = 444<LI>Call Chain = smota_poll &rArr; smota_frame_build &rArr; smota_crc16_compute
+<P><STRONG><a name="[115]"></a>smota_poll</STRONG> (Thumb, 1188 bytes, Stack size 400 bytes, smota_core.o(i.smota_poll))
+<BR><BR>[Stack]<UL><LI>Max Depth = 460<LI>Call Chain = smota_poll &rArr; smota_frame_build &rArr; smota_crc16_compute
 </UL>
 <BR>[Calls]<UL><LI><a href="#[116]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;smota_ctx_get
 <LI><a href="#[eb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__ARM_common_switch8

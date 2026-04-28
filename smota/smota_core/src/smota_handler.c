@@ -401,6 +401,7 @@ smota_err_t smota_handle_query_version_req(const struct smota_query_version_req 
     resp->fw_version_major = ctx->current_version[0];
     resp->fw_version_minor = ctx->current_version[1];
     resp->fw_version_patch = ctx->current_version[2];
+    memcpy(resp->project_id, ctx->current_project_id, sizeof(resp->project_id));
 
     return SMOTA_ERR_OK;
 }
