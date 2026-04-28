@@ -31,6 +31,12 @@ extern "C" {
 #define SMOTA_HAL_VERSION_PATCH  0
 
 /*---------- type define ----------*/
+struct smota_app_info;
+
+enum smota_boot_state {
+    SMOTA_BOOT_STATE_IN_PROGRESS = 0x53494E50UL,
+    SMOTA_BOOT_STATE_APP_VALID = 0x53415644UL,
+};
 
 /**
  * @brief  Flash 操作驱动接口
@@ -208,6 +214,40 @@ struct smota_system_driver {
      * @note   此函数不会返回
      */
     void (*system_reset)(void);
+
+    /**
+     * @brief  获取当前 App 固件信息
+     * @param  app_info: App 固件信息输出
+     * @return 0=成功, <0=失败或无有效 App 信息
+     * @note   具体来源由平台决定，可以是固定 Flash 地址、noinit RAM 或外部存储
+     */
+    int (*get_app_info)(struct smota_app_info *app_info);
+
+    /**
+     * @brief  设置 Boot 持久状态
+     * @param  state: Boot 状态，见 enum smota_boot_state
+     * @return 0=成功, <0=失败
+     */
+    int (*set_boot_state)(uint32_t state);
+
+    /**
+     * @brief  读取 Boot 持久状态
+     * @param  state: Boot 状态输出
+     * @return 0=成功, <0=无有效状态
+     */
+    int (*get_boot_state)(uint32_t *state);
+
+    /**
+     * @brief  板级强制进入 Boot 判断
+     * @return 1=强制进入 Boot, 0=不强制
+     */
+    int (*should_force_boot)(void);
+
+    /**
+     * @brief  判断是否应停留在 Boot
+     * @return 1=停留在 Boot, 0=允许进入 App 捕获窗口
+     */
+    int (*should_stay_in_boot)(void);
 };
 
 /**

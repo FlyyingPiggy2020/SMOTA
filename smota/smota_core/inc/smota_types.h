@@ -67,6 +67,7 @@ struct smota_ctx {
     uint32_t received_size;                  /*!< 已接收数据大小（字节） */
     uint8_t firmware_version[4];             /*!< 固件版本号 */
     uint8_t current_version[4];              /*!< 当前运行固件版本号 */
+    uint8_t current_project_id[16];          /*!< 当前项目名称 ID */
     uint8_t expected_hash[32];               /*!< 固件期望 SHA-256 */
     uint8_t signature_r[32];                 /*!< ECDSA 签名 r 分量 */
     uint8_t signature_s[32];                 /*!< ECDSA 签名 s 分量 */
@@ -77,8 +78,8 @@ struct smota_ctx {
     uint32_t last_packet_time;               /*!< 最后接收数据包的时间戳 */
     uint8_t retry_count;                     /*!< 重试计数 */
     uint8_t reset_pending;                   /*!< 响应发送后执行重启 */
+    uint8_t should_stay_in_boot;             /*!< 是否应停留在 Boot */
     uint32_t sync_error_count;               /*!< 同步错误计数（乱码恢复次数） */
-    uint32_t frames_processed;               /*!< 已处理的帧数 */
 };
 
 /**
@@ -87,7 +88,7 @@ struct smota_ctx {
  */
 struct smota_device_info {
     uint8_t current_version[4];              /*!< 当前运行的固件版本 */
-    uint32_t project_id;                     /*!< 项目 ID */
+    uint8_t project_id[16];                  /*!< 项目名称 ID */
     uint32_t capabilities;                   /*!< 设备能力标志 */
     uint32_t flash_capacity;                 /*!< Flash 总容量（字节） */
     uint32_t sector_size;                    /*!< 扇区大小（字节） */

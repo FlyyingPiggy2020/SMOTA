@@ -8,10 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from .protocol import (
-    ACTIVATE_CHECK_REQ,
     QUERY_VERSION_REQ,
-    CMD_ACTIVATE_CHECK,
-    CMD_ACTIVATE_CHECK_RESP,
     CMD_DATA_BLOCK,
     CMD_DATA_BLOCK_RESP,
     CMD_DATA_COMPLETE,
@@ -35,11 +32,10 @@ from .protocol import (
     TRANSFER_COMPLETE_REQ,
     TRANSFER_COMPLETE_RESP,
     compare_version,
-    decode_activate_check,
     decode_handshake,
     decode_query_version,
     format_version,
-    read_firmware,
+    read_ota_package,
 )
 
 
@@ -52,7 +48,6 @@ StatusFn = Callable[[str], None]
 class UpgradeConfig:
     firmware_path: Path
     version: tuple[int, int, int]
-    project_id: str
     transport: str
     host: str
     port: int
@@ -87,7 +82,10 @@ class UpgradeSession:
         self._stop_event.set()
 
     def run(self) -> None:
-        project_id = self.config.project_id.encode("utf-8")[:16].ljust(16, b"\x00")
+        package = read_ota_package(self.config.firmware_path)
+        target_version = package.manifest.version
+        firmware = package.firmware
+        project_id = package.manifest.project_id.encode("utf-8")[:16].ljust(16, b"\x00")
         if self.config.transport == "serial":
             client = SmotaSerialClient(
                 port=self.config.serial_port,
@@ -95,7 +93,7 @@ class UpgradeSession:
                 timeout=self.config.timeout_s,
                 logger=self.logger,
             )
-            self.logger("INFO", f"transport=serial port={self.config.serial_port} baud={self.config.serial_baudrate}")
+            self.logger("INFO", f"传输方式=串口 串口={self.config.serial_port} 波特率={self.config.serial_baudrate}")
         else:
             client = SmotaTcpClient(
                 host=self.config.host,
@@ -103,50 +101,52 @@ class UpgradeSession:
                 timeout=self.config.timeout_s,
                 logger=self.logger,
             )
-            self.logger("INFO", f"transport=tcp endpoint={self.config.host}:{self.config.port}")
+            self.logger("INFO", f"传输方式=TCP 地址={self.config.host}:{self.config.port}")
 
-        self.logger("INFO", f"target version={format_version(self.config.version)}")
+        self.logger("INFO", f"目标版本={format_version(target_version)}")
+        self.logger("INFO", f"项目名称ID={package.manifest.project_id}")
+        self.logger("INFO", f"OTA文件={package.path}")
+        self.logger("INFO", f"容器固件={package.manifest.firmware_name}")
         self.progress(0)
 
         try:
-            self.status("Connecting")
+            self.status("连接中")
             self._connect_with_retry(client, self.config.connect_timeout_s)
             self._ensure_not_stopped()
 
-            self.status("Query Version")
+            self.status("读取版本")
             running_version = self._query_running_version(client)
-            self.logger("INFO", f"running version={format_version(running_version)}")
+            self.logger("INFO", f"当前运行版本={format_version(running_version)}")
 
-            compare_result = compare_version(running_version, self.config.version)
+            compare_result = compare_version(running_version, target_version)
             if not self.config.force_install:
                 if compare_result == 0:
-                    self.logger("INFO", "running version already matches target, skip download")
-                    self.status("Skipped")
+                    self.logger("INFO", "当前版本与目标版本一致，跳过下载")
+                    self.status("已跳过")
                     self.progress(100)
                     return
                 if compare_result > 0:
                     raise RuntimeError(
-                        "running version is newer than target: "
-                        f"{format_version(running_version)} > {format_version(self.config.version)}; "
-                        "enable Force Install to continue"
+                        "当前运行版本高于目标版本："
+                        f"{format_version(running_version)} > {format_version(target_version)}; "
+                        "如需继续请启用强制安装"
                     )
             else:
-                self.logger("INFO", "force install enabled, continue upgrade flow")
+                self.logger("INFO", "已启用强制安装，继续执行升级流程")
 
-            firmware = read_firmware(self.config.firmware_path)
             firmware_hash = hashlib.sha256(firmware).digest()
-            self.logger("INFO", f"firmware={self.config.firmware_path}")
-            self.logger("INFO", f"firmware size={len(firmware)} bytes")
+            self.logger("INFO", f"固件文件={self.config.firmware_path}")
+            self.logger("INFO", f"固件大小={len(firmware)} 字节")
             self.logger("INFO", f"sha256={firmware_hash.hex()}")
 
-            self.status("Handshake")
+            self.status("握手中")
             handshake_frame = client.exchange(
                 CMD_HANDSHAKE,
                 CMD_HANDSHAKE_RESP,
                 HANDSHAKE_REQ.pack(
-                    self.config.version[0],
-                    self.config.version[1],
-                    self.config.version[2],
+                    target_version[0],
+                    target_version[1],
+                    target_version[2],
                     len(firmware),
                     project_id,
                     self.config.block_timeout_ms,
@@ -157,17 +157,17 @@ class UpgradeSession:
             )
             handshake = decode_handshake(handshake_frame.payload)
             if handshake.error_code != 0:
-                raise RuntimeError(f"handshake failed: 0x{handshake.error_code:08X}")
+                raise RuntimeError(f"握手失败：0x{handshake.error_code:08X}")
 
             self.logger(
                 "INFO",
-                "handshake ok "
-                f"max_packet={handshake.max_packet_size} "
-                f"flash_free={handshake.flash_free_size} "
-                f"next_offset={handshake.next_offset}",
+                "握手成功 "
+                f"最大包长={handshake.max_packet_size} "
+                f"可用 Flash={handshake.flash_free_size} "
+                f"起始偏移={handshake.next_offset}",
             )
 
-            self.status("Header Info")
+            self.status("发送头信息")
             header_frame = client.exchange(
                 CMD_HEADER_INFO,
                 CMD_HEADER_INFO_RESP,
@@ -175,9 +175,9 @@ class UpgradeSession:
             )
             header_error = int.from_bytes(header_frame.payload[:4], "little")
             if header_error != 0:
-                raise RuntimeError(f"header info failed: 0x{header_error:08X}")
+                raise RuntimeError(f"头信息发送失败：0x{header_error:08X}")
 
-            self.status("Transferring")
+            self.status("传输中")
             payload_size = max(1, min(self.config.chunk_size, handshake.max_packet_size - DATA_BLOCK_REQ.size))
             offset = handshake.next_offset
             while offset < len(firmware):
@@ -190,16 +190,16 @@ class UpgradeSession:
                 )
                 block_error, received_offset = DATA_BLOCK_RESP.unpack(frame.payload)
                 if block_error != 0:
-                    raise RuntimeError(f"data block failed at offset {offset}: 0x{block_error:08X}")
+                    raise RuntimeError(f"数据块发送失败，偏移 {offset}：0x{block_error:08X}")
                 if received_offset != offset + len(chunk):
                     raise RuntimeError(
-                        f"device acknowledged offset {received_offset}, expected {offset + len(chunk)}"
+                        f"设备确认偏移为 {received_offset}，期望值为 {offset + len(chunk)}"
                     )
                 offset = received_offset
                 self.progress(int(offset * 100 / len(firmware)))
-                self.logger("INFO", f"progress {offset}/{len(firmware)} bytes")
+                self.logger("INFO", f"进度 {offset}/{len(firmware)} 字节")
 
-            self.status("Verifying")
+            self.status("校验中")
             complete_frame = client.exchange(
                 CMD_DATA_COMPLETE,
                 CMD_DATA_COMPLETE_RESP,
@@ -207,10 +207,10 @@ class UpgradeSession:
             )
             complete_error = TRANSFER_COMPLETE_RESP.unpack(complete_frame.payload)[0]
             if complete_error != 0:
-                raise RuntimeError(f"transfer verify failed: 0x{complete_error:08X}")
-            self.logger("INFO", "transfer verification ok")
+                raise RuntimeError(f"传输校验失败：0x{complete_error:08X}")
+            self.logger("INFO", "传输校验成功")
 
-            self.status("Installing")
+            self.status("安装中")
             install_frame = client.exchange(
                 CMD_INSTALL,
                 CMD_INSTALL_RESP,
@@ -218,41 +218,34 @@ class UpgradeSession:
             )
             install_error, estimated_time_s = INSTALL_RESP.unpack(install_frame.payload)
             if install_error != 0:
-                raise RuntimeError(f"install request failed: 0x{install_error:08X}")
-            self.logger("INFO", f"install accepted, estimated reboot time {estimated_time_s}s")
+                raise RuntimeError(f"安装请求失败：0x{install_error:08X}")
+            self.logger("INFO", f"设备已接受安装，预计重启时间 {estimated_time_s} 秒")
             client.close()
 
             if not self.config.activate_check:
-                self.status("Completed")
+                self.status("已完成")
                 self.progress(100)
                 return
 
-            self.status("Waiting Reconnect")
+            self.status("等待重连")
             self.logger(
                 "INFO",
-                "device will disconnect now; restart win_sim and keep this window running for activate check",
+                "设备即将断开；请重启 win_sim，并保持当前窗口开启以完成激活校验",
             )
             self._connect_with_retry(client, self.config.install_timeout_ms / 1000.0 + 5.0)
             self._ensure_not_stopped()
 
-            self.status("Activate Check")
-            activate_frame = client.exchange(
-                CMD_ACTIVATE_CHECK,
-                CMD_ACTIVATE_CHECK_RESP,
-                ACTIVATE_CHECK_REQ.pack(0),
-            )
-            activate = decode_activate_check(activate_frame.payload)
-            if activate.error_code != 0:
-                raise RuntimeError(f"activate check failed: 0x{activate.error_code:08X}")
-            if activate.version != self.config.version:
+            self.status("激活校验")
+            activate = self._query_running_version(client)
+            if activate != target_version:
                 raise RuntimeError(
-                    "activate check version mismatch: "
-                    f"running {format_version(activate.version)}, "
-                    f"expected {format_version(self.config.version)}"
+                    "激活校验版本不一致："
+                    f"当前运行 {format_version(activate)}，"
+                    f"期望版本 {format_version(target_version)}"
                 )
 
-            self.logger("INFO", f"activate check ok, running version {format_version(activate.version)}")
-            self.status("Completed")
+            self.logger("INFO", f"激活校验成功，当前运行版本 {format_version(activate)}")
+            self.status("已完成")
             self.progress(100)
         finally:
             client.close()
@@ -268,36 +261,25 @@ class UpgradeSession:
                 return
             except Exception as exc:
                 last_error = exc
+                self.logger("INFO", f"连接重试中: {exc}")
                 time.sleep(0.2)
 
         if last_error is None:
-            raise TimeoutError("connect timeout")
-        raise TimeoutError(f"connect timeout: {last_error}") from last_error
+            raise TimeoutError("连接超时")
+        raise TimeoutError(f"连接超时：{last_error}") from last_error
 
     def _query_running_version(self, client: SmotaTcpClient | SmotaSerialClient) -> tuple[int, int, int]:
-        try:
-            frame = client.exchange(
-                CMD_QUERY_VERSION,
-                CMD_QUERY_VERSION_RESP,
-                QUERY_VERSION_REQ.pack(0),
-            )
-            response = decode_query_version(frame.payload)
-            if response.error_code != 0:
-                raise RuntimeError(f"query version failed: 0x{response.error_code:08X}")
-            return response.version
-        except Exception as exc:
-            self.logger("INFO", f"query version 0x07 unavailable, fallback to activate check: {exc}")
-
+        self.logger("INFO", "准备查询设备当前运行版本")
         frame = client.exchange(
-            CMD_ACTIVATE_CHECK,
-            CMD_ACTIVATE_CHECK_RESP,
-            ACTIVATE_CHECK_REQ.pack(0),
+            CMD_QUERY_VERSION,
+            CMD_QUERY_VERSION_RESP,
+            QUERY_VERSION_REQ.pack(0),
         )
-        response = decode_activate_check(frame.payload)
+        response = decode_query_version(frame.payload)
         if response.error_code != 0:
-            raise RuntimeError(f"activate check query failed: 0x{response.error_code:08X}")
+            raise RuntimeError(f"读取版本失败：0x{response.error_code:08X}")
         return response.version
 
     def _ensure_not_stopped(self) -> None:
         if self._stop_event.is_set():
-            raise RuntimeError("upgrade canceled")
+            raise RuntimeError("升级已取消")

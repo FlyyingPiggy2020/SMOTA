@@ -39,6 +39,8 @@ extern "C" {
  *============================================================================*/
 #include "smota_core/inc/smota_types.h"
 #include "smota_core/inc/smota_state.h"
+#include "smota_core/inc/smota_app_info.h"
+#include "smota_core/inc/smota_boot.h"
 #include "smota_core/inc/smota_packet.h"
 #include "smota_core/inc/smota_verify.h"
 #include "smota_core/inc/smota_flash.h"

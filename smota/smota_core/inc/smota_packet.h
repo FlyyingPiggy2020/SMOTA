@@ -37,7 +37,6 @@ extern "C" {
 #define SMOTA_CMD_DATA_BLOCK           0x03 /* 发送数据包 */
 #define SMOTA_CMD_DATA_COMPLETE        0x04 /* 数据包传输完毕 */
 #define SMOTA_CMD_INSTALL              0x05 /* 触发安装请求 */
-#define SMOTA_CMD_ACTIVATE_CHECK       0x06 /* 状态确认请求 */
 #define SMOTA_CMD_QUERY_VERSION        0x07 /* 查询当前固件版本 */
 
 /* 应答标志位 (D7置位) */
@@ -49,7 +48,6 @@ extern "C" {
 #define SMOTA_CMD_DATA_BLOCK_RESP      (SMOTA_CMD_DATA_BLOCK | SMOTA_CMD_RESPONSE_FLAG)
 #define SMOTA_CMD_DATA_COMPLETE_RESP   (SMOTA_CMD_DATA_COMPLETE | SMOTA_CMD_RESPONSE_FLAG)
 #define SMOTA_CMD_INSTALL_RESP         (SMOTA_CMD_INSTALL | SMOTA_CMD_RESPONSE_FLAG)
-#define SMOTA_CMD_ACTIVATE_CHECK_RESP  (SMOTA_CMD_ACTIVATE_CHECK | SMOTA_CMD_RESPONSE_FLAG)
 #define SMOTA_CMD_QUERY_VERSION_RESP   (SMOTA_CMD_QUERY_VERSION | SMOTA_CMD_RESPONSE_FLAG)
 
 /* 通用错误码定义 (uint32_t bit位) */
@@ -229,23 +227,6 @@ struct smota_install_resp {
 };
 
 /**
- * @brief  状态确认请求 (Server -> Device, 0x06)
- */
-struct smota_activate_check_req {
-    uint32_t task_id; /* 升级任务ID (可选) */
-};
-
-/**
- * @brief  状态确认应答 (Device -> Server, 0x86)
- */
-struct smota_activate_check_resp {
-    uint32_t error_code;      /* 0=升级成功并已运行新版本 */
-    uint8_t fw_version_major; /* 当前运行的主版本号 */
-    uint8_t fw_version_minor; /* 当前运行的次版本号 */
-    uint8_t fw_version_patch; /* 当前运行的补丁版本号 */
-};
-
-/**
  * @brief  固件版本查询请求 (Server -> Device, 0x07)
  */
 struct smota_query_version_req {
@@ -358,15 +339,6 @@ smota_err_t smota_handle_transfer_complete_req(const struct smota_transfer_compl
  */
 smota_err_t smota_handle_install_req(const struct smota_install_req *req,
                                       struct smota_install_resp *resp);
-
-/**
- * @brief  处理激活检查请求 (0x06)
- * @param[in]   req: 激活检查请求结构体
- * @param[out]  resp: 激活检查响应结构体
- * @return      smota_err_t 错误码
- */
-smota_err_t smota_handle_activate_check_req(const struct smota_activate_check_req *req,
-                                             struct smota_activate_check_resp *resp);
 
 /**
  * @brief  处理固件版本查询请求 (0x07)

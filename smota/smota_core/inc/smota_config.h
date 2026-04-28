@@ -29,6 +29,8 @@ extern "C" {
 // 如果定义了用户配置文件路径，则引入
 #ifdef SMOTA_USER_CONFIG_FILE
 #include SMOTA_USER_CONFIG_FILE
+#else
+#include "smota_user_config.h"
 #endif
 
 /*==============================================================================

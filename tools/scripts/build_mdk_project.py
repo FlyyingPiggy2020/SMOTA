@@ -3,11 +3,54 @@ import os
 import sys
 import time
 import argparse
+import xml.etree.ElementTree as ET
 
 # ================= 配置区域 =================
 # 默认的 Keil 路径 (如果没有通过参数传入，就用这个)
 DEFAULT_KEIL_PATH = r"C:\Users\w1545\AppData\Local\Keil_v5\UV4\UV4.exe"
 # ===========================================
+
+
+def _get_project_output_log_path(project_path):
+    """
+    根据 uvprojx 推导 Keil 的 html 构建日志路径
+    """
+    try:
+        root = ET.parse(project_path).getroot()
+    except ET.ParseError:
+        return None
+
+    target_name = root.findtext(".//TargetName")
+    output_directory = root.findtext(".//OutputDirectory") or ""
+    if not target_name:
+        return None
+
+    project_dir = os.path.dirname(project_path)
+    output_directory = output_directory.replace("/", os.sep).replace("\\", os.sep)
+    output_dir = os.path.normpath(os.path.join(project_dir, output_directory))
+    return os.path.join(output_dir, f"{target_name}.build_log.htm")
+
+
+def _classify_build_result(project_path, exit_code):
+    """
+    用 Keil 生成的 html 日志兜底判定构建结果，避免 UV4 返回码误报
+    """
+    project_log = _get_project_output_log_path(project_path)
+    if not project_log or not os.path.exists(project_log):
+        return exit_code, None
+
+    try:
+        with open(project_log, "r", encoding="utf-8", errors="replace") as fp:
+            content = fp.read()
+    except OSError:
+        return exit_code, project_log
+
+    if "0 Error(s), 0 Warning(s)." in content:
+        return 0, project_log
+    if "0 Error(s)," in content:
+        return 1, project_log
+
+    return exit_code, project_log
 
 def stream_log_file(process, log_file_path, encoding='gbk'):
     """
@@ -107,15 +150,17 @@ def build_mdk_project(keil_path, project_path, log_dir, mode="build"):
         return -1
 
     # --- 6. 结果判定 ---
+    exit_code, project_log = _classify_build_result(project_path, exit_code)
+
     print("-" * 60)
     if exit_code == 0:
-        print(f"✅ {mode.capitalize()} Success (0 Errors)")
+        print(f"[OK] {mode.capitalize()} Success (0 Errors)")
     elif exit_code == 1:
-        print(f"⚠️ {mode.capitalize()} Completed with WARNINGS (Exit Code: 1)")
+        print(f"[WARN] {mode.capitalize()} Completed with WARNINGS (Exit Code: 1)")
     else:
-        print(f"❌ {mode.capitalize()} FAILED (Exit Code: {exit_code})")
-        # 如果失败了，通常建议用户去看看完整日志
-        # print(f"Log saved to: {log_file}")
+        print(f"[ERROR] {mode.capitalize()} FAILED (Exit Code: {exit_code})")
+        if project_log:
+            print(f"[INFO] 请检查 Keil 日志: {project_log}")
     
     return exit_code
 

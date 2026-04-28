@@ -45,8 +45,8 @@ static struct smota_ctx g_smota_ctx = {
     .last_packet_time = 0,
     .retry_count = 0,
     .reset_pending = 0,
+    .should_stay_in_boot = 0,
     .sync_error_count = 0,
-    .frames_processed = 0,
 };
 
 /**

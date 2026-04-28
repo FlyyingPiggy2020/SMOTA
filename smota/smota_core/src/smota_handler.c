@@ -41,11 +41,10 @@ smota_err_t smota_handle_handshake_req(const struct smota_handshake_req *req,
 {
     struct smota_ctx *ctx;
     const struct smota_hal *hal;
+    uint8_t capabilities = 0U;
 #if SMOTA_RELIABILITY_VERSION
     uint8_t requested_version[3];
 #endif
-    int i;
-
     if (req == NULL || resp == NULL) {
         return SMOTA_ERR_INVALID_PARAM;
     }
@@ -58,12 +57,10 @@ smota_err_t smota_handle_handshake_req(const struct smota_handshake_req *req,
 
     ctx = smota_ctx_get();
 
-    for (i = 0; i < 16; i++) {
-        if (req->project_id[i] != 0U) {
-            break;
-        }
+    if (memcmp(req->project_id, ctx->current_project_id, sizeof(ctx->current_project_id)) != 0) {
+        resp->error_code = SMOTA_ERR_PROJECT_ID_MISMATCH;
+        return SMOTA_ERR_INVALID_PARAM;
     }
-    (void)i;
 
 #if SMOTA_RELIABILITY_VERSION
     requested_version[0] = req->fw_version_major;
@@ -75,7 +72,7 @@ smota_err_t smota_handle_handshake_req(const struct smota_handshake_req *req,
     }
 #endif
 
-    if (req->firmware_size > SMOTA_FLASH_SIZE) {
+    if (req->firmware_size > SMOTA_APP_SIZE) {
         resp->error_code = SMOTA_ERR_FLASH_INSUFFICIENT;
         return SMOTA_ERR_SPACE;
     }
@@ -96,10 +93,19 @@ smota_err_t smota_handle_handshake_req(const struct smota_handshake_req *req,
     resp->next_offset = 0;
     resp->max_packet_size = 256;
     resp->mtu_size = 512;
-    resp->flash_free_size = SMOTA_FLASH_SIZE;
+    resp->flash_free_size = SMOTA_APP_SIZE;
     resp->block_timeout = req->block_timeout;
     resp->install_timeout = req->install_timeout;
-    resp->capabilities = SMOTA_CAP_ANTI_ROLLBACK;
+#if SMOTA_RELIABILITY_SOURCE
+    capabilities |= SMOTA_CAP_SIGNATURE;
+#endif
+#if SMOTA_RELIABILITY_TRANSMISSION
+    capabilities |= SMOTA_CAP_ENCRYPT;
+#endif
+#if SMOTA_RELIABILITY_VERSION
+    capabilities |= SMOTA_CAP_ANTI_ROLLBACK;
+#endif
+    resp->capabilities = capabilities;
 
     smota_state_set(SMOTA_STATE_HANDSHAKE);
 
@@ -130,7 +136,13 @@ smota_err_t smota_handle_header_info_req(const struct smota_header_info_req *req
     }
 
     hal = smota_hal_get();
-    if (hal == NULL || hal->flash == NULL || hal->crypto == NULL) {
+    if (hal == NULL || hal->flash == NULL) {
+        resp->error_code = SMOTA_ERR_FLASH_WRITE;
+        return SMOTA_ERR_INVALID_STATE;
+    }
+
+#if SMOTA_RELIABILITY_SOURCE || SMOTA_RELIABILITY_TRANSMISSION
+    if (hal->crypto == NULL) {
         resp->error_code = SMOTA_ERR_FLASH_WRITE;
         return SMOTA_ERR_INVALID_STATE;
     }
@@ -138,7 +150,19 @@ smota_err_t smota_handle_header_info_req(const struct smota_header_info_req *req
     memcpy(ctx->expected_hash, req->sha256_hash, sizeof(ctx->expected_hash));
     memcpy(ctx->signature_r, req->signature_r, sizeof(ctx->signature_r));
     memcpy(ctx->signature_s, req->signature_s, sizeof(ctx->signature_s));
+#else
+    memset(ctx->expected_hash, 0, sizeof(ctx->expected_hash));
+    memset(ctx->signature_r, 0, sizeof(ctx->signature_r));
+    memset(ctx->signature_s, 0, sizeof(ctx->signature_s));
+#endif
     ctx->received_size = 0;
+
+    if (hal->system != NULL &&
+        hal->system->set_boot_state != NULL &&
+        hal->system->set_boot_state(SMOTA_BOOT_STATE_IN_PROGRESS) < 0) {
+        resp->error_code = SMOTA_ERR_FLASH_WRITE;
+        return SMOTA_ERR_FLASH;
+    }
 
     ret = hal->flash->erase(0, ctx->firmware_size);
     if (ret < 0) {
@@ -228,11 +252,13 @@ smota_err_t smota_handle_transfer_complete_req(const struct smota_transfer_compl
 {
     struct smota_ctx *ctx;
     const struct smota_hal *hal;
+#if SMOTA_RELIABILITY_SOURCE || SMOTA_RELIABILITY_TRANSMISSION
     void *sha256_ctx;
     uint8_t hash[32];
     uint8_t buffer[SMOTA_VERIFY_READ_CHUNK_SIZE];
     uint32_t offset;
     int ret;
+#endif
 
     if (req == NULL || resp == NULL) {
         return SMOTA_ERR_INVALID_PARAM;
@@ -255,7 +281,13 @@ smota_err_t smota_handle_transfer_complete_req(const struct smota_transfer_compl
     }
 
     hal = smota_hal_get();
-    if (hal == NULL || hal->flash == NULL || hal->crypto == NULL) {
+    if (hal == NULL || hal->flash == NULL) {
+        resp->error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
+        return SMOTA_ERR_INVALID_STATE;
+    }
+
+#if SMOTA_RELIABILITY_SOURCE || SMOTA_RELIABILITY_TRANSMISSION
+    if (hal->crypto == NULL) {
         resp->error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
         return SMOTA_ERR_INVALID_STATE;
     }
@@ -298,6 +330,7 @@ smota_err_t smota_handle_transfer_complete_req(const struct smota_transfer_compl
         resp->error_code = SMOTA_ERR_VERIFY_SHA256_FAILED;
         return SMOTA_ERR_VERSION;
     }
+#endif
 
     resp->error_code = 0;
     smota_state_set(SMOTA_STATE_COMPLETE);
@@ -315,6 +348,7 @@ smota_err_t smota_handle_install_req(const struct smota_install_req *req,
                                      struct smota_install_resp *resp)
 {
     struct smota_ctx *ctx;
+    const struct smota_hal *hal;
 
     if (req == NULL || resp == NULL) {
         return SMOTA_ERR_INVALID_PARAM;
@@ -326,38 +360,21 @@ smota_err_t smota_handle_install_req(const struct smota_install_req *req,
     }
 
     ctx = smota_ctx_get();
+    hal = smota_hal_get();
+
+    if (hal != NULL &&
+        hal->system != NULL &&
+        hal->system->set_boot_state != NULL &&
+        hal->system->set_boot_state(SMOTA_BOOT_STATE_APP_VALID) < 0) {
+        resp->error_code = SMOTA_ERR_INSTALL_FLASH_READ;
+        return SMOTA_ERR_FLASH;
+    }
 
     resp->error_code = 0;
     resp->estimated_time_s = 5;
 
     smota_state_set(SMOTA_STATE_INSTALL);
     ctx->reset_pending = 1;
-
-    return SMOTA_ERR_OK;
-}
-
-/**
- * @brief       处理激活检查请求 (0x06)
- * @param[in]   req: 激活检查请求结构体
- * @param[out]  resp: 激活检查响应结构体
- * @return      smota_err_t 错误码
- */
-smota_err_t smota_handle_activate_check_req(const struct smota_activate_check_req *req,
-                                            struct smota_activate_check_resp *resp)
-{
-    struct smota_ctx *ctx;
-
-    if (resp == NULL) {
-        return SMOTA_ERR_INVALID_PARAM;
-    }
-
-    (void)req;
-    ctx = smota_ctx_get();
-
-    resp->error_code = 0;
-    resp->fw_version_major = ctx->current_version[0];
-    resp->fw_version_minor = ctx->current_version[1];
-    resp->fw_version_patch = ctx->current_version[2];
 
     return SMOTA_ERR_OK;
 }
