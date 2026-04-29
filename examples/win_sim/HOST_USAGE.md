@@ -21,13 +21,15 @@ python examples/win_sim/test_host.py --reset-sim --firmware examples/win_sim/REA
 
 1. 重置模拟器 flash 和运行版本
 2. 启动 `win_sim.exe -r`
-3. 握手
-4. 下发头部信息
-5. 分块发送固件
-6. 请求校验
-7. 请求安装
-8. 等待模拟器重启
-9. 再次连接并执行 `activate_check`
+3. 连接后先执行 `query_version`
+4. 版本一致时直接跳过下载（除非 `--force-install`）
+5. 握手
+6. 下发头部信息
+7. 分块发送固件
+8. 请求校验
+9. 请求安装
+10. 等待模拟器重启
+11. 再次连接并执行 `activate_check`
 
 ## 常用参数
 

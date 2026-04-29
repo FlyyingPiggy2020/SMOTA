@@ -137,7 +137,7 @@ smota_err_t smota_frame_parse(const uint8_t *data, uint16_t len, struct smota_fr
     frame->payload = (uint8_t *)data + sizeof(struct smota_frame_header);
     frame->crc16 = frame_crc;
 
-    return 0;
+    return SMOTA_ERR_OK;
 }
 
 /**

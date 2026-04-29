@@ -29,6 +29,8 @@ extern "C" {
 // 如果定义了用户配置文件路径，则引入
 #ifdef SMOTA_USER_CONFIG_FILE
 #include SMOTA_USER_CONFIG_FILE
+#else
+#include "smota_user_config.h"
 #endif
 
 /*==============================================================================
@@ -232,6 +234,14 @@ extern "C" {
  */
 #ifndef SMOTA_PACKET_TIMEOUT_MS
 #define SMOTA_PACKET_TIMEOUT_MS 5000
+#endif
+
+/**
+ * @brief Boot 捕获窗口时间
+ * @note  单位：毫秒。窗口内收到有效 smOTA 帧则停留在 Boot，否则允许跳转 App
+ */
+#ifndef SMOTA_BOOT_CAPTURE_WINDOW_MS
+#define SMOTA_BOOT_CAPTURE_WINDOW_MS 300U
 #endif
 
 /**

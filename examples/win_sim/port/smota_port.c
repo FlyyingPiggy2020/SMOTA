@@ -52,6 +52,7 @@
  */
 #define SMOTA_PORT_FLASH_FILE "flash_sim.bin"
 #define SMOTA_PORT_STATE_FILE "device_state.bin"
+#define SMOTA_PORT_PROJECT_ID  "SMOTA_BOOT"
 
 /*---------- type define ----------*/
 
@@ -197,6 +198,35 @@ void smota_port_load_running_version(uint8_t version[4])
 
     runtime_state_load();
     memcpy(version, g_runtime_state.version, sizeof(g_runtime_state.version));
+}
+
+/**
+ * @brief  获取模拟器默认固件身份
+ * @param  info: 固件身份输出
+ * @return 0=成功, <0=失败
+ */
+int smota_port_get_default_info(struct smota_firmware_info *info)
+{
+    if (info == NULL) {
+        return -1;
+    }
+
+    runtime_state_load();
+    memset(info, 0, sizeof(*info));
+    memcpy(info->version, g_runtime_state.version, sizeof(info->version));
+    memcpy(info->project_id, SMOTA_PORT_PROJECT_ID, sizeof(SMOTA_PORT_PROJECT_ID) - 1U);
+
+    return 0;
+}
+
+/**
+ * @brief  获取模拟器当前运行固件身份
+ * @param  info: 固件身份输出
+ * @return 0=成功, <0=失败
+ */
+int smota_port_get_running_info(struct smota_firmware_info *info)
+{
+    return smota_port_get_default_info(info);
 }
 
 /**
@@ -652,13 +682,12 @@ uint64_t system_get_tick_ms(void)
  */
 void system_reset(void)
 {
-    struct smota_ctx *ctx = smota_ctx_get();
+    uint8_t target_version[4] = {0};
 
     runtime_state_load();
-    if (ctx != NULL && smota_state_get() == SMOTA_STATE_INSTALL) {
-        memcpy(g_runtime_state.version,
-               ctx->firmware_version,
-               sizeof(g_runtime_state.version));
+    if (smota_state_get() == SMOTA_STATE_INSTALL) {
+        smota_get_target_version(target_version);
+        memcpy(g_runtime_state.version, target_version, sizeof(g_runtime_state.version));
         runtime_state_save();
     }
 

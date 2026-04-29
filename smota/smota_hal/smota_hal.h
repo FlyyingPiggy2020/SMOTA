@@ -31,10 +31,16 @@ extern "C" {
 #define SMOTA_HAL_VERSION_PATCH  0
 
 /*---------- type define ----------*/
+struct smota_firmware_info;
+
+enum smota_boot_state {
+    SMOTA_BOOT_STATE_IN_PROGRESS = 0x53494E50UL,
+    SMOTA_BOOT_STATE_APP_VALID = 0x53415644UL,
+};
 
 /**
  * @brief  Flash 操作驱动接口
- * @details 提供 Flash 的读写擦除操作
+ * @details 提供 OTA 目标存储区的读写擦除操作，地址为逻辑偏移
  */
 struct smota_flash_driver {
     /**
@@ -50,8 +56,8 @@ struct smota_flash_driver {
     int (*deinit)(void);
 
     /**
-     * @brief  读取 Flash 数据
-     * @param  addr: Flash 地址（绝对地址，如 0x08010000）
+     * @brief  读取 OTA 目标存储区数据
+     * @param  addr: OTA 目标存储区逻辑偏移
      * @param  data: 数据缓冲区
      * @param  size: 读取字节数
      * @return 实际读取字节数，<0=失败
@@ -59,8 +65,8 @@ struct smota_flash_driver {
     int (*read)(uint32_t addr, uint8_t *data, uint32_t size);
 
     /**
-     * @brief  写入 Flash 数据
-     * @param  addr: Flash 地址（绝对地址，如 0x08010000）
+     * @brief  写入 OTA 目标存储区数据
+     * @param  addr: OTA 目标存储区逻辑偏移
      * @param  data: 数据缓冲区
      * @param  size: 写入字节数
      * @return 实际写入字节数，<0=失败
@@ -69,11 +75,11 @@ struct smota_flash_driver {
     int (*write)(uint32_t addr, const uint8_t *data, uint32_t size);
 
     /**
-     * @brief  擦除 Flash 区域
-     * @param  addr: Flash 起始地址（绝对地址）
+     * @brief  擦除 OTA 目标存储区
+     * @param  addr: OTA 目标存储区逻辑偏移
      * @param  size: 擦除字节数（需对齐到页/扇区）
      * @return 0=成功, <0=失败
-     * @note   地址和大小应对齐到页边界
+     * @note   平台 port 负责将逻辑偏移映射到物理存储地址
      */
     int (*erase)(uint32_t addr, uint32_t size);
 
@@ -208,6 +214,61 @@ struct smota_system_driver {
      * @note   此函数不会返回
      */
     void (*system_reset)(void);
+
+};
+
+/**
+ * @brief  固件身份接口
+ * @details 提供当前运行固件和默认设备身份
+ */
+struct smota_identity_driver {
+    /**
+     * @brief  获取默认设备身份
+     * @param  info: 固件身份输出
+     * @return 0=成功, <0=失败
+     * @note   空 Boot 场景可在这里返回 0.0.0 + SMOTA_BOOT
+     */
+    int (*get_default_info)(struct smota_firmware_info *info);
+
+    /**
+     * @brief  获取当前运行固件身份
+     * @param  info: 固件身份输出
+     * @return 0=成功, <0=失败或无有效固件信息
+     * @note   具体来源由平台决定，可以是固定 Flash 地址、noinit RAM 或外部存储
+     */
+    int (*get_running_info)(struct smota_firmware_info *info);
+};
+
+/**
+ * @brief  Bootloader 策略接口
+ * @details 提供升级持久状态与 Boot 停留策略
+ */
+struct smota_boot_driver {
+    /**
+     * @brief  设置 Boot 持久状态
+     * @param  state: Boot 状态，见 enum smota_boot_state
+     * @return 0=成功, <0=失败
+     */
+    int (*set_state)(uint32_t state);
+
+    /**
+     * @brief  读取 Boot 持久状态
+     * @param  state: Boot 状态输出
+     * @return 0=成功, <0=无有效状态
+     */
+    int (*get_state)(uint32_t *state);
+
+    /**
+     * @brief  判断是否应停留在 Boot
+     * @return 1=停留在 Boot, 0=允许进入 App 捕获窗口
+     */
+    int (*should_stay_in_boot)(void);
+
+    /**
+     * @brief  跳转到 App
+     * @return 正常跳转成功不会返回，<0=跳转失败
+     */
+    int (*jump_to_app)(void);
 };
 
 /**
@@ -219,6 +280,8 @@ struct smota_hal {
     struct smota_comm_driver    *comm;
     struct smota_crypto_driver  *crypto;
     struct smota_system_driver  *system;
+    struct smota_identity_driver *identity;
+    struct smota_boot_driver    *boot;
 };
 
 /*---------- variable prototype ----------*/

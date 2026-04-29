@@ -39,6 +39,7 @@ extern "C" {
  *============================================================================*/
 #include "smota_core/inc/smota_types.h"
 #include "smota_core/inc/smota_state.h"
+#include "smota_core/inc/smota_app_info.h"
 #include "smota_core/inc/smota_packet.h"
 #include "smota_core/inc/smota_verify.h"
 #include "smota_core/inc/smota_flash.h"
@@ -120,6 +121,30 @@ const char *smota_get_error_string(void);
  * @return      bool true=运行中, false=空闲
  */
 bool smota_is_running(void);
+
+/**
+ * @brief       获取当前运行固件身份
+ * @param[out]  info 固件身份输出
+ */
+void smota_get_current_firmware_info(struct smota_firmware_info *info);
+
+/**
+ * @brief       获取待升级固件版本
+ * @param[out]  version 版本输出缓冲区，长度 4 字节
+ */
+void smota_get_target_version(uint8_t version[4]);
+
+/**
+ * @brief       判断 smOTA 是否要求停留在 Boot
+ * @return      bool true=停留在 Boot, false=可继续启动策略
+ */
+bool smota_should_stay_in_boot(void);
+
+/**
+ * @brief       设置 smOTA Boot 停留标志
+ * @param[in]   stay true=停留在 Boot, false=清除停留标志
+ */
+void smota_set_stay_in_boot(bool stay);
 
 #ifdef __cplusplus
 }

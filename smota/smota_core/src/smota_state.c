@@ -15,6 +15,7 @@
 #include <stddef.h>
 #include "../inc/smota_types.h"
 #include "../inc/smota_state.h"
+#include "smota_internal.h"
 
 /*---------- macro ----------*/
 
@@ -34,19 +35,17 @@ static struct smota_ctx g_smota_ctx = {
     .firmware_size = 0,
     .received_size = 0,
     .firmware_version = {0},
-    .current_version = {0},
+    .current_info = {{0}, {0}},
     .expected_hash = {0},
     .signature_r = {0},
     .signature_s = {0},
-    .flash_addr = 0,
     .timeout_ms = 0,
-    .recv_buffer = NULL,
     .recv_len = 0,
     .last_packet_time = 0,
-    .retry_count = 0,
+    .boot_window_start_time = 0,
     .reset_pending = 0,
+    .should_stay_in_boot = 0,
     .sync_error_count = 0,
-    .frames_processed = 0,
 };
 
 /**
@@ -152,15 +151,13 @@ void smota_state_reset(void)
     g_smota_ctx.firmware_size = 0;
     g_smota_ctx.received_size = 0;
     memcpy(g_smota_ctx.firmware_version,
-           g_smota_ctx.current_version,
+           g_smota_ctx.current_info.version,
            sizeof(g_smota_ctx.firmware_version));
     memset(g_smota_ctx.expected_hash, 0, sizeof(g_smota_ctx.expected_hash));
     memset(g_smota_ctx.signature_r, 0, sizeof(g_smota_ctx.signature_r));
     memset(g_smota_ctx.signature_s, 0, sizeof(g_smota_ctx.signature_s));
-    g_smota_ctx.flash_addr = 0;
     g_smota_ctx.recv_len = 0;
     g_smota_ctx.last_packet_time = 0;
-    g_smota_ctx.retry_count = 0;
     g_smota_ctx.reset_pending = 0;
 }
 

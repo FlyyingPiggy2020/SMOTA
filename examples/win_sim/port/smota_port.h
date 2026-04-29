@@ -41,6 +41,8 @@ int comm_send(const uint8_t *data, uint32_t size);
 int comm_receive(uint8_t *data, uint32_t size, uint32_t timeout);
 
 void smota_port_load_running_version(uint8_t version[4]);
+int smota_port_get_default_info(struct smota_firmware_info *info);
+int smota_port_get_running_info(struct smota_firmware_info *info);
 void smota_port_reset_runtime_state(void);
 
 /*---------- 系统驱动函数 ----------*/

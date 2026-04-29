@@ -1,5 +1,6 @@
 # Prerequisites
 *.d
+*.crf
 
 # Object files
 *.o
@@ -66,3 +67,4 @@ boards/*/.mdk/*
 !boards/*/.mdk/README.md
 !boards/*/boot/*.hex
 .roo/mcp.json
+*.crf
