@@ -18,14 +18,6 @@ extern "C" {
 /*---------- includes ----------*/
 
 /*---------- macro ----------*/
-#define SMOTA_MODE                     2
-#define SMOTA_FLASH_BASE_ADDR          0x08000000U
-#define SMOTA_FLASH_SIZE               0x00040000U
-#define SMOTA_BOOTLOADER_SIZE          0x0000A000U
-#define SMOTA_APP_SIZE                 0x00036000U
-#define SMOTA_FLASH_PAGE_SIZE          0x00000800U
-#define SMOTA_WORK_BUF_SIZE            1024U
-#define SMOTA_DECRYPT_BUF_SIZE         512U
 #define SMOTA_BOOT_REQUEST_ADDR        0x20000000U
 
 #define SMOTA_APP_PROJECT_ID           "STM32G0SS_APP"

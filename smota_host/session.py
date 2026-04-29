@@ -5,7 +5,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .protocol import (
     QUERY_VERSION_REQ,
@@ -45,6 +45,8 @@ StatusFn = Callable[[str], None]
 DeviceInfoFn = Callable[[tuple[int, int, int], str], None]
 BOOT_PROJECT_ID = "SMOTA_BOOT"
 EMPTY_BOOT_VERSION = (0, 0, 0)
+BOOT_CAPTURE_PROBE_TIMEOUT_S = 0.08
+BOOT_CAPTURE_PROBE_DELAY_S = 0.02
 
 
 @dataclass(frozen=True)
@@ -75,12 +77,16 @@ class UpgradeSession:
         progress: ProgressFn,
         status: StatusFn,
         device_info: DeviceInfoFn | None = None,
+        serial_connection: Any | None = None,
+        serial_connection_owned: bool = False,
     ) -> None:
         self.config = config
         self.logger = logger
         self.progress = progress
         self.status = status
         self.device_info = device_info
+        self.serial_connection = serial_connection
+        self.serial_connection_owned = serial_connection_owned
         self._stop_event = threading.Event()
 
     def request_stop(self) -> None:
@@ -97,6 +103,8 @@ class UpgradeSession:
                 baudrate=self.config.serial_baudrate,
                 timeout=self.config.timeout_s,
                 logger=self.logger,
+                serial_connection=self.serial_connection,
+                close_on_close=self.serial_connection is None or self.serial_connection_owned,
             )
             self.logger("INFO", f"传输方式=串口 串口={self.config.serial_port} 波特率={self.config.serial_baudrate}")
         else:
@@ -115,12 +123,11 @@ class UpgradeSession:
         self.progress(0)
 
         try:
-            self.status("连接中")
-            self._connect_with_retry(client, self.config.connect_timeout_s)
-            self._ensure_not_stopped()
-
-            self.status("读取版本")
-            running_info = self._query_running_version(client)
+            self.status("捕获Boot")
+            running_info = self._query_running_version_with_probe(
+                client,
+                self.config.connect_timeout_s,
+            )
             running_version = running_info.version
             self.logger("INFO", f"当前运行版本={format_version(running_version)}")
             self.logger("INFO", f"当前设备ID={running_info.project_id}")
@@ -230,11 +237,12 @@ class UpgradeSession:
                 "INFO",
                 "设备即将断开；请重启 win_sim，并保持当前窗口开启以完成激活校验",
             )
-            self._connect_with_retry(client, self.config.install_timeout_ms / 1000.0 + 5.0)
-            self._ensure_not_stopped()
 
             self.status("激活校验")
-            activate = self._query_running_version(client)
+            activate = self._query_running_version_with_probe(
+                client,
+                self.config.install_timeout_ms / 1000.0 + 5.0,
+            )
             if self.device_info is not None:
                 self.device_info(activate.version, activate.project_id)
             if activate.version != target_version:
@@ -262,14 +270,60 @@ class UpgradeSession:
             except Exception as exc:
                 last_error = exc
                 self.logger("INFO", f"连接重试中: {exc}")
+                client.close()
                 time.sleep(0.2)
 
         if last_error is None:
             raise TimeoutError("连接超时")
         raise TimeoutError(f"连接超时：{last_error}") from last_error
 
-    def _query_running_version(self, client: SmotaTcpClient | SmotaSerialClient):
-        self.logger("INFO", "准备查询设备当前运行版本")
+    def _query_running_version_with_probe(self, client: SmotaTcpClient | SmotaSerialClient, timeout_s: float):
+        deadline = time.time() + timeout_s
+        last_error: Exception | None = None
+        original_timeout = client.timeout
+        probe_timeout = min(original_timeout, BOOT_CAPTURE_PROBE_TIMEOUT_S)
+        connected = False
+
+        self.logger(
+            "INFO",
+            "等待连接并持续发送 QUERY_VERSION 捕获 Boot，"
+            f"最长 {timeout_s:.1f} 秒",
+        )
+        try:
+            while time.time() < deadline:
+                self._ensure_not_stopped()
+                if not connected:
+                    client.set_timeout(original_timeout)
+                    try:
+                        client.connect()
+                        connected = True
+                        client.set_timeout(probe_timeout)
+                    except Exception as exc:
+                        last_error = exc
+                        self.logger("INFO", f"连接重试中: {exc}")
+                        client.close()
+                        time.sleep(0.2)
+                        continue
+
+                try:
+                    return self._query_running_version(client, verbose=False)
+                except Exception as exc:
+                    last_error = exc
+                    if not isinstance(exc, TimeoutError):
+                        self.logger("INFO", f"捕获过程中连接异常，重新连接: {exc}")
+                        client.close()
+                        connected = False
+                    time.sleep(BOOT_CAPTURE_PROBE_DELAY_S)
+        finally:
+            client.set_timeout(original_timeout)
+
+        if last_error is None:
+            raise TimeoutError("读取版本超时")
+        raise TimeoutError(f"读取版本超时：{last_error}") from last_error
+
+    def _query_running_version(self, client: SmotaTcpClient | SmotaSerialClient, verbose: bool = True):
+        if verbose:
+            self.logger("INFO", "准备查询设备当前运行版本")
         frame = client.exchange(
             CMD_QUERY_VERSION,
             CMD_QUERY_VERSION_RESP,

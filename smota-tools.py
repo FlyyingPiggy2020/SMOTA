@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+#仅参考测试，编译examples使用，请根据实际情况修改路径和命令
 import sys
 sys.dont_write_bytecode = True
 import os

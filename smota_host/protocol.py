@@ -8,7 +8,7 @@ import struct
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 try:
     import serial
@@ -369,6 +369,11 @@ class SmotaTcpClient:
         self.sock.settimeout(self.timeout)
         self._log("INFO", f"connected to {self.host}:{self.port}")
 
+    def set_timeout(self, timeout: float) -> None:
+        self.timeout = timeout
+        if self.sock is not None:
+            self.sock.settimeout(timeout)
+
     def close(self) -> None:
         if self.sock is not None:
             self.sock.close()
@@ -468,17 +473,39 @@ class SmotaTcpClient:
 
 
 class SmotaSerialClient:
-    def __init__(self, port: str, baudrate: int, timeout: float, logger: LogFn | None = None) -> None:
+    def __init__(
+        self,
+        port: str,
+        baudrate: int,
+        timeout: float,
+        logger: LogFn | None = None,
+        serial_connection: Any | None = None,
+        close_on_close: bool = True,
+    ) -> None:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
         self.logger = logger
         self.seq = 0
-        self.ser: serial.Serial | None = None
+        self.ser: serial.Serial | None = serial_connection
+        self.external_serial = serial_connection
+        self.close_on_close = close_on_close
 
     def connect(self) -> None:
         if serial is None:
             raise RuntimeError("pyserial is not installed, run: pip install pyserial")
+
+        if self.ser is None and self.external_serial is not None:
+            self.ser = self.external_serial
+
+        if self.ser is not None:
+            if not getattr(self.ser, "is_open", True):
+                self.ser.open()
+            self.ser.baudrate = self.baudrate
+            self.ser.timeout = self.timeout
+            self.ser.write_timeout = self.timeout
+            self._log("INFO", f"using opened serial {self.port}@{self.baudrate}")
+            return
 
         self.ser = serial.Serial(
             port=self.port,
@@ -488,11 +515,28 @@ class SmotaSerialClient:
         )
         self._log("INFO", f"connected to serial {self.port}@{self.baudrate}")
 
+    def set_timeout(self, timeout: float) -> None:
+        self.timeout = timeout
+        if self.ser is not None:
+            self.ser.timeout = timeout
+            self.ser.write_timeout = timeout
+
     def close(self) -> None:
         if self.ser is not None:
-            self.ser.close()
-            self.ser = None
-            self._log("INFO", "connection closed")
+            current = self.ser
+            try:
+                if self.close_on_close:
+                    try:
+                        current.close()
+                        self._log("INFO", "connection closed")
+                    except Exception as exc:
+                        self._log("INFO", f"connection close failed: {exc}")
+                else:
+                    self._log("INFO", "serial connection released")
+            finally:
+                if self.close_on_close and current is self.external_serial:
+                    self.external_serial = None
+                self.ser = None
 
     def exchange(self, cmd: int, expected_cmd: int, payload: bytes = b"") -> Frame:
         seq = self.seq & 0xFF

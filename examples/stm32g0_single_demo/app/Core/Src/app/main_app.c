@@ -4,7 +4,7 @@
  * @Author       : lxf
  * @Date         : 2026-04-27 10:00:00
  * @LastEditors  : lxf_zjnb@qq.com
- * @LastEditTime : 2026-04-27 10:00:00
+ * @LastEditTime : 2026-04-29 16:01:02
  * @Brief        : App Demo 主循环任务实现
  */
 
@@ -34,7 +34,7 @@ __attribute__((used, section(".smota_boot_request")))
 static volatile struct smota_boot_request g_smota_boot_request_area;
 
 static uint32_t g_last_log_tick_ms = 0U;
-static uint8_t g_hello_message[] = "hello world\r\n";
+static uint8_t g_hello_message[] = "hello app2\r\n";
 
 /*---------- function ----------*/
 void main_app_init(void)

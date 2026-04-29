@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) 2025 by Lu Xianfan.
  * @FilePath     : smota_user_config.h
  * @Author       : lxf
@@ -37,7 +37,7 @@ extern "C" {
 
 #define SMOTA_PACKET_TIMEOUT_MS        5000U
 #define SMOTA_VERIFY_TIMEOUT_MS        30000U
-#define SMOTA_BOOT_CAPTURE_WINDOW_MS   300U
+#define SMOTA_BOOT_CAPTURE_WINDOW_MS   3000U
 #define SMOTA_BOOT_REQUEST_ADDR        0x20000000U
 
 #define SMOTA_APP_PROJECT_ID           "STM32G0SS_APP"
