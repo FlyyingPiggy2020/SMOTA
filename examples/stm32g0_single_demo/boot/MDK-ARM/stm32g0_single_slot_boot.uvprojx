@@ -1249,6 +1249,16 @@
               <FileType>1</FileType>
               <FilePath>..\port\smota_port_system.c</FilePath>
             </File>
+            <File>
+              <FileName>smota_port_identity.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\port\smota_port_identity.c</FilePath>
+            </File>
+            <File>
+              <FileName>smota_port_boot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\port\smota_port_boot.c</FilePath>
+            </File>
           </Files>
         </Group>
       </Groups>

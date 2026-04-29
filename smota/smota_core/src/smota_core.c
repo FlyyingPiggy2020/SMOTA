@@ -14,10 +14,10 @@
 #include <stddef.h>
 #include <string.h>
 #include "smota.h"
+#include "smota_internal.h"
 
 /*---------- macro ----------*/
 #define SMOTA_RECV_BUFFER_SIZE 1024 /* 接收缓冲区大小 */
-#define SMOTA_BOOT_PROJECT_ID "SMOTA_BOOT"
 
 /*---------- type define ----------*/
 
@@ -27,7 +27,10 @@
 static bool smota_cmd_is_stateless(uint8_t cmd);
 static bool smota_state_has_active_session(smota_state_t state);
 static void smota_session_reset_after_error(void);
-static void smota_load_current_app_info(struct smota_ctx *ctx);
+static void smota_load_current_firmware_info(struct smota_ctx *ctx);
+static uint64_t smota_get_current_time_ms(const struct smota_system_driver *system);
+static void smota_boot_update_stay_request(struct smota_ctx *ctx, const struct smota_boot_driver *boot);
+static void smota_boot_try_jump_to_app(struct smota_ctx *ctx, const struct smota_boot_driver *boot, uint64_t current_time);
 
 /*---------- variable ----------*/
 /**
@@ -43,7 +46,7 @@ static smota_err_t g_last_error = SMOTA_ERR_OK;
 /**
  * @brief  接收缓冲区
  */
-static uint8_t g_recv_buffer[SMOTA_RECV_BUFFER_SIZE];
+static uint8_t g_rx_buffer[SMOTA_RECV_BUFFER_SIZE];
 
 /**
  * @brief  OTA 是否已初始化
@@ -53,45 +56,35 @@ static bool g_initialized = false;
 /*---------- function ----------*/
 
 /**
- * @brief  通过系统驱动加载当前 App 信息
+ * @brief  通过身份驱动加载当前固件信息
  * @param  ctx: OTA 上下文
  */
-static void smota_load_current_app_info(struct smota_ctx *ctx)
+static void smota_load_current_firmware_info(struct smota_ctx *ctx)
 {
-    struct smota_app_info app_info;
+    struct smota_firmware_info info;
 
     if (ctx == NULL) {
         return;
     }
 
-    memset(ctx->current_version, 0, sizeof(ctx->current_version));
-    memset(ctx->current_project_id, 0, sizeof(ctx->current_project_id));
-    memcpy(ctx->current_project_id,
-           SMOTA_BOOT_PROJECT_ID,
-           sizeof(SMOTA_BOOT_PROJECT_ID) - 1U);
+    memset(&ctx->current_info, 0, sizeof(ctx->current_info));
 
     if (g_hal == NULL ||
-        g_hal->system == NULL ||
-        g_hal->system->get_app_info == NULL) {
+        g_hal->identity == NULL) {
         return;
     }
 
-    memset(&app_info, 0, sizeof(app_info));
-    if (g_hal->system->get_app_info(&app_info) < 0) {
-        return;
+    memset(&info, 0, sizeof(info));
+    if (g_hal->identity->get_default_info != NULL &&
+        g_hal->identity->get_default_info(&info) == 0) {
+        memcpy(&ctx->current_info, &info, sizeof(ctx->current_info));
     }
 
-    if (app_info.magic != SMOTA_APP_INFO_MAGIC) {
-        return;
+    memset(&info, 0, sizeof(info));
+    if (g_hal->identity->get_running_info != NULL &&
+        g_hal->identity->get_running_info(&info) == 0) {
+        memcpy(&ctx->current_info, &info, sizeof(ctx->current_info));
     }
-
-    ctx->current_version[0] = app_info.fw_version_major;
-    ctx->current_version[1] = app_info.fw_version_minor;
-    ctx->current_version[2] = app_info.fw_version_patch;
-    ctx->current_version[3] = 0U;
-    memcpy(ctx->current_project_id,
-           app_info.project_id,
-           sizeof(ctx->current_project_id));
 }
 
 /**
@@ -129,12 +122,71 @@ static void smota_session_reset_after_error(void)
 }
 
 /**
+ * @brief  获取当前系统时间
+ * @param  system: system driver
+ * @return 当前毫秒时间，无法获取时返回 0
+ */
+static uint64_t smota_get_current_time_ms(const struct smota_system_driver *system)
+{
+    if (system != NULL && system->get_tick_ms != NULL) {
+        return system->get_tick_ms();
+    }
+
+    return 0U;
+}
+
+/**
+ * @brief  根据 boot driver 刷新 Boot 停留标志
+ * @param  ctx: OTA 上下文
+ * @param  boot: boot driver
+ */
+static void smota_boot_update_stay_request(struct smota_ctx *ctx, const struct smota_boot_driver *boot)
+{
+    if (ctx == NULL ||
+        boot == NULL ||
+        boot->should_stay_in_boot == NULL) {
+        return;
+    }
+
+    if (boot->should_stay_in_boot() != 0) {
+        ctx->should_stay_in_boot = 1U;
+    }
+}
+
+/**
+ * @brief  Boot 捕获窗口到期后尝试跳转 App
+ * @param  ctx: OTA 上下文
+ * @param  boot: boot driver
+ * @param  current_time: 当前毫秒时间
+ */
+static void smota_boot_try_jump_to_app(struct smota_ctx *ctx, const struct smota_boot_driver *boot, uint64_t current_time)
+{
+    if (ctx == NULL ||
+        boot == NULL ||
+        boot->jump_to_app == NULL ||
+        ctx->should_stay_in_boot != 0U) {
+        return;
+    }
+
+    if ((current_time - ctx->boot_window_start_time) < SMOTA_BOOT_CAPTURE_WINDOW_MS) {
+        return;
+    }
+
+    if (boot->jump_to_app() != 0) {
+        g_last_error = SMOTA_ERR_INVALID_STATE;
+    }
+
+    ctx->should_stay_in_boot = 1U;
+}
+
+/**
  * @brief       初始化 OTA 模块
  * @return      smota_err_t 错误码
  */
 smota_err_t smota_init(void)
 {
     struct smota_ctx *ctx;
+    const struct smota_system_driver *system;
     int ret;
 
     /* 防止重复初始化 */
@@ -173,19 +225,18 @@ smota_err_t smota_init(void)
     ctx->state = SMOTA_STATE_IDLE;
     ctx->firmware_size = 0;
     ctx->received_size = 0;
-    ctx->flash_addr = 0;
     ctx->timeout_ms = 5000; /* 默认 5 秒超时 */
-    ctx->recv_buffer = g_recv_buffer;
     ctx->recv_len = 0;
     ctx->last_packet_time = 0;
-    ctx->retry_count = 0;
+    system = (g_hal != NULL) ? g_hal->system : NULL;
+    ctx->boot_window_start_time = smota_get_current_time_ms(system);
     ctx->reset_pending = 0;
     ctx->should_stay_in_boot = 0;
     ctx->sync_error_count = 0;
     memset(ctx->expected_hash, 0, sizeof(ctx->expected_hash));
     memset(ctx->signature_r, 0, sizeof(ctx->signature_r));
     memset(ctx->signature_s, 0, sizeof(ctx->signature_s));
-    smota_load_current_app_info(ctx);
+    smota_load_current_firmware_info(ctx);
 
     /* 重置状态机 */
     smota_state_reset();
@@ -218,7 +269,7 @@ smota_err_t smota_deinit(void)
     smota_state_reset();
 
     /* 清除缓冲区 */
-    memset(g_recv_buffer, 0, sizeof(g_recv_buffer));
+    memset(g_rx_buffer, 0, sizeof(g_rx_buffer));
 
     g_initialized = false;
     g_last_error = SMOTA_ERR_OK;
@@ -235,6 +286,7 @@ smota_err_t smota_poll(void)
 {
     struct smota_ctx *ctx;
     const struct smota_system_driver *system;
+    const struct smota_boot_driver *boot;
     smota_state_t state;
     struct smota_frame frame;
     struct smota_handshake_resp handshake_resp = {0};
@@ -256,11 +308,8 @@ smota_err_t smota_poll(void)
 
     ctx = smota_ctx_get();
     system = (g_hal != NULL) ? g_hal->system : NULL;
-    if (system != NULL &&
-        system->should_stay_in_boot != NULL &&
-        system->should_stay_in_boot() != 0) {
-        ctx->should_stay_in_boot = 1U;
-    }
+    boot = (g_hal != NULL) ? g_hal->boot : NULL;
+    smota_boot_update_stay_request(ctx, boot);
 
     state = smota_state_get();
     if (state == SMOTA_STATE_ERROR) {
@@ -269,11 +318,7 @@ smota_err_t smota_poll(void)
     }
 
     /* 获取当前时间 */
-    if (system != NULL && system->get_tick_ms != NULL) {
-        current_time = system->get_tick_ms();
-    } else {
-        current_time = 0;
-    }
+    current_time = smota_get_current_time_ms(system);
 
     /* 检查超时 */
     if (smota_state_has_active_session(state) &&
@@ -288,7 +333,7 @@ smota_err_t smota_poll(void)
 
     /* 尝试接收数据 */
     if (g_hal != NULL && g_hal->comm != NULL && g_hal->comm->receive != NULL) {
-        recv_len = g_hal->comm->receive(g_recv_buffer + ctx->recv_len,
+        recv_len = g_hal->comm->receive(g_rx_buffer + ctx->recv_len,
                                         SMOTA_RECV_BUFFER_SIZE - ctx->recv_len,
                                         0); /* 非阻塞 */
         if (recv_len > 0) {
@@ -301,7 +346,7 @@ smota_err_t smota_poll(void)
                 int sof_offset;    /* SOF 搜索结果 */
 
                 /* 解析帧 */
-                ret = smota_frame_parse(g_recv_buffer, ctx->recv_len, &frame);
+                ret = smota_frame_parse(g_rx_buffer, ctx->recv_len, &frame);
 
                 if (ret == SMOTA_ERR_OK) {
                     /* 处理命令 */
@@ -423,14 +468,14 @@ smota_err_t smota_poll(void)
                     consumed = sizeof(struct smota_frame_header) + frame.header.length + sizeof(uint16_t);
                     ctx->recv_len -= consumed;
                     if (ctx->recv_len > 0) {
-                        memmove(g_recv_buffer,
-                                g_recv_buffer + consumed,
+                        memmove(g_rx_buffer,
+                                g_rx_buffer + consumed,
                                 ctx->recv_len);
                     }
 
                 } else if (ret == SMOTA_ERR_LENGTH) {
                     /* 帧不完整，检查是否为异常长度值 */
-                    struct smota_frame_header *hdr = (struct smota_frame_header *)g_recv_buffer;
+                    struct smota_frame_header *hdr = (struct smota_frame_header *)g_rx_buffer;
                     uint16_t max_possible_len = SMOTA_RECV_BUFFER_SIZE - sizeof(struct smota_frame_header) - sizeof(uint16_t);
 
                     /* 检查长度是否异常：
@@ -443,12 +488,12 @@ smota_err_t smota_poll(void)
                         hdr->length > max_possible_len) {
                         /* 尝试搜索下一个 SOF 进行恢复 */
                         ctx->sync_error_count++;
-                        sof_offset = smota_find_sof(g_recv_buffer + 1, ctx->recv_len - 1);
+                        sof_offset = smota_find_sof(g_rx_buffer + 1, ctx->recv_len - 1);
                         if (sof_offset >= 0) {
                             /* 找到下一个 SOF（sof_offset 是相对偏移+1） */
                             ctx->recv_len -= (sof_offset + 1);
                             if (ctx->recv_len > 0) {
-                                memmove(g_recv_buffer, g_recv_buffer + sof_offset + 1, ctx->recv_len);
+                                memmove(g_rx_buffer, g_rx_buffer + sof_offset + 1, ctx->recv_len);
                             }
                             continue;
                         } else {
@@ -463,12 +508,12 @@ smota_err_t smota_poll(void)
                 } else {
                     /* 帧解析错误，尝试搜索下一个 SOF 进行乱码恢复 */
                     ctx->sync_error_count++;
-                    sof_offset = smota_find_sof(g_recv_buffer, ctx->recv_len);
+                    sof_offset = smota_find_sof(g_rx_buffer, ctx->recv_len);
                     if (sof_offset > 0) {
                         /* 找到下一个 SOF，丢弃前面的无效数据 */
                         ctx->recv_len -= sof_offset;
                         if (ctx->recv_len > 0) {
-                            memmove(g_recv_buffer, g_recv_buffer + sof_offset, ctx->recv_len);
+                            memmove(g_rx_buffer, g_rx_buffer + sof_offset, ctx->recv_len);
                         }
                         /* 继续循环尝试解析下一帧 */
                         continue;
@@ -477,7 +522,7 @@ smota_err_t smota_poll(void)
                          * 跳过当前字节，继续搜索 */
                         ctx->recv_len -= 1;
                         if (ctx->recv_len > 0) {
-                            memmove(g_recv_buffer, g_recv_buffer + 1, ctx->recv_len);
+                            memmove(g_rx_buffer, g_rx_buffer + 1, ctx->recv_len);
                         }
                         /* 继续循环尝试解析 */
                         continue;
@@ -490,6 +535,10 @@ smota_err_t smota_poll(void)
             }
         }
     }
+
+    smota_boot_update_stay_request(ctx, boot);
+    current_time = smota_get_current_time_ms(system);
+    smota_boot_try_jump_to_app(ctx, boot, current_time);
 
     return SMOTA_ERR_OK;
 }
@@ -579,6 +628,44 @@ bool smota_is_running(void)
 {
     smota_state_t state = smota_state_get();
     return (state != SMOTA_STATE_IDLE && state != SMOTA_STATE_ERROR);
+}
+
+void smota_get_current_firmware_info(struct smota_firmware_info *info)
+{
+    struct smota_ctx *ctx;
+
+    if (info == NULL) {
+        return;
+    }
+
+    ctx = smota_ctx_get();
+    memcpy(info, &ctx->current_info, sizeof(*info));
+}
+
+void smota_get_target_version(uint8_t version[4])
+{
+    struct smota_ctx *ctx;
+
+    if (version == NULL) {
+        return;
+    }
+
+    ctx = smota_ctx_get();
+    memcpy(version, ctx->firmware_version, sizeof(ctx->firmware_version));
+}
+
+bool smota_should_stay_in_boot(void)
+{
+    struct smota_ctx *ctx = smota_ctx_get();
+
+    return (ctx->should_stay_in_boot != 0U) ? true : false;
+}
+
+void smota_set_stay_in_boot(bool stay)
+{
+    struct smota_ctx *ctx = smota_ctx_get();
+
+    ctx->should_stay_in_boot = (stay == true) ? 1U : 0U;
 }
 
 /*---------- end of file ----------*/

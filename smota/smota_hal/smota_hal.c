@@ -57,11 +57,29 @@ int smota_hal_register(const struct smota_hal *hal)
         return -4;
     }
 
+    /* 检查身份驱动 */
+    if (hal->identity == NULL) {
+        SMOTA_DEBUG_PRINTF("Error: Identity driver is NULL\r\n");
+        return -5;
+    }
+
+    /* 单分区覆盖升级需要 Boot 策略保证失败后不误跳坏 App */
+#if SMOTA_MODE == 2
+    if (hal->boot == NULL ||
+        hal->boot->set_state == NULL ||
+        hal->boot->get_state == NULL ||
+        hal->boot->should_stay_in_boot == NULL ||
+        hal->boot->jump_to_app == NULL) {
+        SMOTA_DEBUG_PRINTF("Error: Boot driver is incomplete\r\n");
+        return -7;
+    }
+#endif
+
     /* 加密驱动可选（根据配置） */
 #if SMOTA_RELIABILITY_SOURCE || SMOTA_RELIABILITY_TRANSMISSION
     if (hal->crypto == NULL) {
         SMOTA_DEBUG_PRINTF("Error: Crypto driver is NULL (required by config)\r\n");
-        return -5;
+        return -6;
     }
 #endif
 

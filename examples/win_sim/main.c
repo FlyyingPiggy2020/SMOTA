@@ -66,12 +66,19 @@ static struct smota_system_driver g_system_driver = {
     .system_reset = system_reset,
 };
 
+/*---------- 身份驱动接口 ----------*/
+static struct smota_identity_driver g_identity_driver = {
+    .get_default_info = smota_port_get_default_info,
+    .get_running_info = smota_port_get_running_info,
+};
+
 /*---------- HAL 综合接口 ----------*/
 static struct smota_hal g_smota_hal = {
     .flash = &g_flash_driver,
     .comm = &g_comm_driver,
     .crypto = &g_crypto_driver,
     .system = &g_system_driver,
+    .identity = &g_identity_driver,
 };
 
 /*---------- variable ----------*/
@@ -100,17 +107,20 @@ static void print_help(const char *prog)
  */
 static void show_status(void)
 {
-    struct smota_ctx *ctx = smota_ctx_get();
+    struct smota_firmware_info info;
     smota_state_t state = smota_get_state();
     uint8_t progress = smota_get_progress();
+
+    memset(&info, 0, sizeof(info));
+    smota_get_current_firmware_info(&info);
 
     printf("\n=== OTA Status ===\n");
     printf("State: %s\n", smota_state_to_string(state));
     printf("Progress: %d%%\n", progress);
     printf("Running Version: %u.%u.%u\n",
-           ctx->current_version[0],
-           ctx->current_version[1],
-           ctx->current_version[2]);
+           info.version[0],
+           info.version[1],
+           info.version[2]);
 
     if (smota_get_error() != SMOTA_ERR_OK) {
         printf("Last Error: %s (code=%d)\n",
@@ -272,15 +282,6 @@ int main(int argc, char *argv[])
     if (ret < 0) {
         printf("Error: smota_init failed: %d\n", ret);
         return -1;
-    }
-
-    {
-        uint8_t running_version[4] = {0};
-        struct smota_ctx *ctx = smota_ctx_get();
-
-        smota_port_load_running_version(running_version);
-        memcpy(ctx->current_version, running_version, sizeof(ctx->current_version));
-        memcpy(ctx->firmware_version, running_version, sizeof(ctx->firmware_version));
     }
 
     printf("smOTA initialized successfully (Win32 Simulation)\n");

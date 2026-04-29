@@ -14,6 +14,7 @@
 #include "../inc/smota_packet.h"
 #include "../inc/smota_state.h"
 #include "../inc/smota_config.h"
+#include "smota_internal.h"
 
 /*---------- macro ----------*/
 #define SMOTA_VERIFY_READ_CHUNK_SIZE 256U
@@ -25,8 +26,6 @@
 /*---------- function prototype ----------*/
 
 /*---------- variable ----------*/
-static uint8_t g_resp_buffer[256];
-static void *g_resp_buffer_used __attribute__((unused)) = g_resp_buffer;
 
 /*---------- function ----------*/
 
@@ -57,7 +56,9 @@ smota_err_t smota_handle_handshake_req(const struct smota_handshake_req *req,
 
     ctx = smota_ctx_get();
 
-    if (memcmp(req->project_id, ctx->current_project_id, sizeof(ctx->current_project_id)) != 0) {
+    if (memcmp(req->project_id,
+               ctx->current_info.project_id,
+               sizeof(ctx->current_info.project_id)) != 0) {
         resp->error_code = SMOTA_ERR_PROJECT_ID_MISMATCH;
         return SMOTA_ERR_INVALID_PARAM;
     }
@@ -66,7 +67,7 @@ smota_err_t smota_handle_handshake_req(const struct smota_handshake_req *req,
     requested_version[0] = req->fw_version_major;
     requested_version[1] = req->fw_version_minor;
     requested_version[2] = req->fw_version_patch;
-    if (!smota_verify_version(ctx->current_version, requested_version)) {
+    if (!smota_verify_version(ctx->current_info.version, requested_version)) {
         resp->error_code = SMOTA_ERR_VERSION_MISMATCH;
         return SMOTA_ERR_VERSION;
     }
@@ -157,9 +158,9 @@ smota_err_t smota_handle_header_info_req(const struct smota_header_info_req *req
 #endif
     ctx->received_size = 0;
 
-    if (hal->system != NULL &&
-        hal->system->set_boot_state != NULL &&
-        hal->system->set_boot_state(SMOTA_BOOT_STATE_IN_PROGRESS) < 0) {
+    if (hal->boot != NULL &&
+        hal->boot->set_state != NULL &&
+        hal->boot->set_state(SMOTA_BOOT_STATE_IN_PROGRESS) < 0) {
         resp->error_code = SMOTA_ERR_FLASH_WRITE;
         return SMOTA_ERR_FLASH;
     }
@@ -363,9 +364,9 @@ smota_err_t smota_handle_install_req(const struct smota_install_req *req,
     hal = smota_hal_get();
 
     if (hal != NULL &&
-        hal->system != NULL &&
-        hal->system->set_boot_state != NULL &&
-        hal->system->set_boot_state(SMOTA_BOOT_STATE_APP_VALID) < 0) {
+        hal->boot != NULL &&
+        hal->boot->set_state != NULL &&
+        hal->boot->set_state(SMOTA_BOOT_STATE_APP_VALID) < 0) {
         resp->error_code = SMOTA_ERR_INSTALL_FLASH_READ;
         return SMOTA_ERR_FLASH;
     }
@@ -398,10 +399,12 @@ smota_err_t smota_handle_query_version_req(const struct smota_query_version_req 
     ctx = smota_ctx_get();
 
     resp->error_code = 0;
-    resp->fw_version_major = ctx->current_version[0];
-    resp->fw_version_minor = ctx->current_version[1];
-    resp->fw_version_patch = ctx->current_version[2];
-    memcpy(resp->project_id, ctx->current_project_id, sizeof(resp->project_id));
+    resp->fw_version_major = ctx->current_info.version[0];
+    resp->fw_version_minor = ctx->current_info.version[1];
+    resp->fw_version_patch = ctx->current_info.version[2];
+    memcpy(resp->project_id,
+           ctx->current_info.project_id,
+           sizeof(resp->project_id));
 
     return SMOTA_ERR_OK;
 }

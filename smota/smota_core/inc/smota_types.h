@@ -58,42 +58,12 @@ typedef enum {
 } smota_err_t;
 
 /**
- * @brief OTA 上下文结构体
- * @details 存储 OTA 升级过程中的运行时状态信息
+ * @brief 固件身份信息
+ * @details 存储固件版本与项目 ID
  */
-struct smota_ctx {
-    smota_state_t state;                     /*!< 当前状态 */
-    uint32_t firmware_size;                  /*!< 固件总大小（字节） */
-    uint32_t received_size;                  /*!< 已接收数据大小（字节） */
-    uint8_t firmware_version[4];             /*!< 固件版本号 */
-    uint8_t current_version[4];              /*!< 当前运行固件版本号 */
-    uint8_t current_project_id[16];          /*!< 当前项目名称 ID */
-    uint8_t expected_hash[32];               /*!< 固件期望 SHA-256 */
-    uint8_t signature_r[32];                 /*!< ECDSA 签名 r 分量 */
-    uint8_t signature_s[32];                 /*!< ECDSA 签名 s 分量 */
-    uint32_t flash_addr;                     /*!< 目标 Flash 起始地址 */
-    uint32_t timeout_ms;                     /*!< 通信超时时间（毫秒） */
-    uint8_t *recv_buffer;                    /*!< 接收缓冲区指针 */
-    uint32_t recv_len;                       /*!< 已接收数据长度 */
-    uint32_t last_packet_time;               /*!< 最后接收数据包的时间戳 */
-    uint8_t retry_count;                     /*!< 重试计数 */
-    uint8_t reset_pending;                   /*!< 响应发送后执行重启 */
-    uint8_t should_stay_in_boot;             /*!< 是否应停留在 Boot */
-    uint32_t sync_error_count;               /*!< 同步错误计数（乱码恢复次数） */
-};
-
-/**
- * @brief 设备信息结构体
- * @details 存储设备的静态信息，用于 OTA 握手阶段
- */
-struct smota_device_info {
-    uint8_t current_version[4];              /*!< 当前运行的固件版本 */
+struct smota_firmware_info {
+    uint8_t version[4];                      /*!< 固件版本号 */
     uint8_t project_id[16];                  /*!< 项目名称 ID */
-    uint32_t capabilities;                   /*!< 设备能力标志 */
-    uint32_t flash_capacity;                 /*!< Flash 总容量（字节） */
-    uint32_t sector_size;                    /*!< 扇区大小（字节） */
-    uint32_t block_size;                     /*!< 块大小（字节） */
-    uint32_t max_firmware_size;              /*!< 最大支持固件大小（字节） */
 };
 
 /*---------- variable prototype ----------*/

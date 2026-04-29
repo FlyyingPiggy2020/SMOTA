@@ -17,10 +17,11 @@ extern "C" {
 
 /*---------- includes ----------*/
 #include <stdint.h>
+#include "smota_config.h"
 
 /*---------- macro ----------*/
 #ifndef SMOTA_BOOT_REQUEST_ADDR
-#define SMOTA_BOOT_REQUEST_ADDR          0x20000000U
+#error "SMOTA_BOOT_REQUEST_ADDR must be defined in smota_user_config.h"
 #endif
 
 #define SMOTA_BOOT_REQUEST_MAGIC         0x53424F54UL

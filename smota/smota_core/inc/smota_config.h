@@ -237,6 +237,14 @@ extern "C" {
 #endif
 
 /**
+ * @brief Boot 捕获窗口时间
+ * @note  单位：毫秒。窗口内收到有效 smOTA 帧则停留在 Boot，否则允许跳转 App
+ */
+#ifndef SMOTA_BOOT_CAPTURE_WINDOW_MS
+#define SMOTA_BOOT_CAPTURE_WINDOW_MS 300U
+#endif
+
+/**
  * @brief 固件验签超时时间
  * @note   单位：毫秒
  */

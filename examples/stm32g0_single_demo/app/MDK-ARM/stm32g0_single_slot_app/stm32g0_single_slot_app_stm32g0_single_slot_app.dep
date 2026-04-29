@@ -47,9 +47,9 @@ I (C:\Users\w1545\AppData\Local\Keil_v5\ARM\ARM_Compiler_5.06u7\include\stdlib.h
 I (../../boot/Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_core.h)(0x6945F91E)
 I (../../boot/Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_ctlreq.h)(0x6945F91E)
 I (../../../../smota/smota_core/inc/smota_app_info.h)(0x69F00302)
-I (../../../../smota/smota_core/inc/smota_config.h)(0x69EF1E0E)
-I (../port/smota_user_config.h)(0x69EFFDB7)
-I (../../../../smota/smota_core/inc/smota_boot.h)(0x69F00EB6)
+I (../../../../smota/smota_core/inc/smota_config.h)(0x69F1639D)
+I (../port/smota_user_config.h)(0x69F163EF)
+I (../../../../smota/smota_core/inc/smota_boot.h)(0x69F16384)
 F (../Core/Src/main.c)(0x69EFFDB8)(--c99 -c --cpu Cortex-M0+ -g -O3 --apcs=interwork --split_sections -I ../Core/Inc -I ../../boot/Drivers/STM32G0xx_HAL_Driver/Inc -I ../../boot/Drivers/STM32G0xx_HAL_Driver/Inc/Legacy -I ../../boot/Drivers/CMSIS/Device/ST/STM32G0xx/Include -I ../../boot/Drivers/CMSIS/Include -I ../USB_Device/App -I ../USB_Device/Target -I ../../boot/Middlewares/ST/STM32_USB_Device_Library/Core/Inc -I ../../boot/Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc -I ../port -I ../../../../smota -I ../../../../smota/smota_core/inc-I.\RTE\_stm32g0_single_slot_app-D__UVISION_VERSION="543" -DSTM32G0B1xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32G0B1xx-o stm32g0_single_slot_app\\main.o --omf_browse stm32g0_single_slot_app\\main.crf --depend stm32g0_single_slot_app\\main.d)
 I (../Core/Inc/main.h)(0x69EEB96F)
 I (../../boot/Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_hal.h)(0x6945F942)

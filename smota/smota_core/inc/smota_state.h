@@ -64,12 +64,6 @@ bool smota_state_transition_is_valid(smota_state_t from, smota_state_t to);
  */
 void smota_state_reset(void);
 
-/**
- * @brief       获取 OTA 上下文指针
- * @return      struct smota_ctx* 上下文指针
- */
-struct smota_ctx *smota_ctx_get(void);
-
 /*---------- end of file ----------*/
 
 #ifdef __cplusplus

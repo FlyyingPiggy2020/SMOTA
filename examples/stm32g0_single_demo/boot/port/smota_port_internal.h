@@ -36,12 +36,15 @@ extern "C" {
 extern struct smota_flash_driver g_smota_flash_driver;
 extern struct smota_comm_driver g_smota_comm_driver;
 extern struct smota_system_driver g_smota_system_driver;
+extern struct smota_identity_driver g_smota_identity_driver;
+extern struct smota_boot_driver g_smota_boot_driver;
 
 /*---------- function prototype ----------*/
 int smota_port_flash_flush_staged_write(void);
 void smota_port_flash_reset_write_ctx(uint32_t next_addr);
 int smota_port_flash_erase_pages(uint32_t addr, uint32_t size);
 int smota_port_flash_program_doubleword(uint32_t addr, const uint8_t data[8]);
+const struct smota_app_info *smota_port_get_app_info(void);
 
 /*---------- end of file ----------*/
 

@@ -38,28 +38,10 @@ int smota_port_init(void);
 int smota_port_deinit(void);
 
 /**
- * @brief  读取当前运行固件版本
- * @param  version: 版本输出缓冲区，长度 4 字节
- */
-void smota_port_load_running_version(uint8_t version[4]);
-
-/**
- * @brief  读取当前运行固件的项目名称 ID
- * @param  project_id: 项目标识输出缓冲区，长度 16 字节
- */
-void smota_port_load_running_project_id(uint8_t project_id[16]);
-
-/**
  * @brief  检查 App 镜像是否有效
  * @return 1=有效, 0=无效
  */
 uint8_t smota_port_is_app_valid(void);
-
-/**
- * @brief  跳转到 App
- * @return 0=成功跳转前准备完成, <0=跳转失败
- */
-int smota_port_jump_to_app(void);
 
 /*---------- end of file ----------*/
 
