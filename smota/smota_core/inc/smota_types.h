@@ -27,12 +27,9 @@ extern "C" {
  */
 typedef enum {
     SMOTA_STATE_IDLE = 0,        /*!< 空闲状态，等待 OTA 请求 */
-    SMOTA_STATE_HANDSHAKE,       /*!< 握手阶段，协商参数 */
-    SMOTA_STATE_HEADER_INFO,     /*!< 头部信息阶段，接收固件头部 */
+    SMOTA_STATE_STARTED,         /*!< 已开始 OTA 会话 */
     SMOTA_STATE_TRANSFER,        /*!< 传输阶段，接收固件数据 */
-    SMOTA_STATE_COMPLETE,        /*!< 传输完成，验证固件 */
-    SMOTA_STATE_INSTALL,         /*!< 安装阶段，写入新固件 */
-    SMOTA_STATE_ACTIVATE,        /*!< 激活阶段，准备切换固件 */
+    SMOTA_STATE_FINISHED,        /*!< 传输完成，等待复位 */
     SMOTA_STATE_ERROR,           /*!< 错误状态，发生错误 */
     SMOTA_STATE_MAX              /*!< 状态枚举最大值 */
 } smota_state_t;

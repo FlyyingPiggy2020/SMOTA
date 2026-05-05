@@ -35,10 +35,11 @@ static struct smota_ctx g_smota_ctx = {
     .firmware_size = 0,
     .received_size = 0,
     .firmware_version = {0},
+    .target_project_id = {0},
     .current_info = {{0}, {0}},
     .expected_hash = {0},
-    .signature_r = {0},
-    .signature_s = {0},
+    .verify_hash = 0,
+    .query_allowed = 0,
     .timeout_ms = 0,
     .recv_len = 0,
     .last_packet_time = 0,
@@ -53,12 +54,9 @@ static struct smota_ctx g_smota_ctx = {
  */
 static const char *g_state_string[] = {
     "IDLE",
-    "HANDSHAKE",
-    "HEADER_INFO",
+    "STARTED",
     "TRANSFER",
-    "COMPLETE",
-    "INSTALL",
-    "ACTIVATE",
+    "FINISHED",
     "ERROR",
 };
 
@@ -67,15 +65,12 @@ static const char *g_state_string[] = {
  * @note   from -> to，允许的状态转换为 true
  */
 static const bool g_state_transition[SMOTA_STATE_MAX][SMOTA_STATE_MAX] = {
-    /* to:   IDLE  HANDS  HEAD  TRANS COMP INST ACT  ERR */
-    /* IDLE   */ {false, true,  false, false, false, false, false, true},
-    /* HANDS  */ {false, false, true,  false, false, false, false, true},
-    /* HEAD   */ {false, false, false, true,  false, false, false, true},
-    /* TRANS  */ {false, false, false, false, true,  false, false, true},
-    /* COMP   */ {false, false, false, false, false, true,  false, true},
-    /* INST   */ {false, false, false, false, false, false, true,  true},
-    /* ACT    */ {true,  false, false, false, false, false, false, true},
-    /* ERR    */ {true,  false, false, false, false, false, false, false},
+    /* to:    IDLE  START TRANS FIN   ERR */
+    /* IDLE  */ {false, true,  false, false, true},
+    /* START */ {false, false, true,  false, true},
+    /* TRANS */ {false, false, false, true,  true},
+    /* FIN   */ {true,  false, false, false, true},
+    /* ERR   */ {true,  false, false, false, false},
 };
 
 /*---------- function ----------*/
@@ -153,9 +148,10 @@ void smota_state_reset(void)
     memcpy(g_smota_ctx.firmware_version,
            g_smota_ctx.current_info.version,
            sizeof(g_smota_ctx.firmware_version));
+    memset(g_smota_ctx.target_project_id, 0, sizeof(g_smota_ctx.target_project_id));
     memset(g_smota_ctx.expected_hash, 0, sizeof(g_smota_ctx.expected_hash));
-    memset(g_smota_ctx.signature_r, 0, sizeof(g_smota_ctx.signature_r));
-    memset(g_smota_ctx.signature_s, 0, sizeof(g_smota_ctx.signature_s));
+    g_smota_ctx.verify_hash = 0;
+    g_smota_ctx.query_allowed = 0;
     g_smota_ctx.recv_len = 0;
     g_smota_ctx.last_packet_time = 0;
     g_smota_ctx.reset_pending = 0;

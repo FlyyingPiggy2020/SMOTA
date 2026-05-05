@@ -33,11 +33,6 @@ extern "C" {
 /*---------- type define ----------*/
 struct smota_firmware_info;
 
-enum smota_boot_state {
-    SMOTA_BOOT_STATE_IN_PROGRESS = 0x53494E50UL,
-    SMOTA_BOOT_STATE_APP_VALID = 0x53415644UL,
-};
-
 /**
  * @brief  Flash 操作驱动接口
  * @details 提供 OTA 目标存储区的读写擦除操作，地址为逻辑偏移
@@ -241,23 +236,9 @@ struct smota_identity_driver {
 
 /**
  * @brief  Bootloader 策略接口
- * @details 提供升级持久状态与 Boot 停留策略
+ * @details 提供 Boot 停留策略与 App 跳转动作
  */
 struct smota_boot_driver {
-    /**
-     * @brief  设置 Boot 持久状态
-     * @param  state: Boot 状态，见 enum smota_boot_state
-     * @return 0=成功, <0=失败
-     */
-    int (*set_state)(uint32_t state);
-
-    /**
-     * @brief  读取 Boot 持久状态
-     * @param  state: Boot 状态输出
-     * @return 0=成功, <0=无有效状态
-     */
-    int (*get_state)(uint32_t *state);
-
     /**
      * @brief  判断是否应停留在 Boot
      * @return 1=停留在 Boot, 0=允许进入 App 捕获窗口

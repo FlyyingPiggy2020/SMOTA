@@ -26,11 +26,11 @@
 /*---------- function prototype ----------*/
 static bool smota_cmd_is_stateless(uint8_t cmd);
 static bool smota_state_has_active_session(smota_state_t state);
+static bool smota_frame_payload_is_valid(const struct smota_frame *frame);
 static void smota_session_reset_after_error(void);
 static void smota_load_current_firmware_info(struct smota_ctx *ctx);
 static uint64_t smota_get_current_time_ms(const struct smota_system_driver *system);
-static void smota_boot_update_stay_request(struct smota_ctx *ctx, const struct smota_boot_driver *boot);
-static void smota_boot_try_jump_to_app(struct smota_ctx *ctx, const struct smota_boot_driver *boot, uint64_t current_time);
+static void smota_boot_poll_jump(struct smota_ctx *ctx, const struct smota_boot_driver *boot, uint64_t current_time);
 
 /*---------- variable ----------*/
 /**
@@ -94,7 +94,7 @@ static void smota_load_current_firmware_info(struct smota_ctx *ctx)
  */
 static bool smota_cmd_is_stateless(uint8_t cmd)
 {
-    return (cmd == SMOTA_CMD_QUERY_VERSION);
+    return (cmd == SMOTA_CMD_QUERY);
 }
 
 /**
@@ -104,12 +104,45 @@ static bool smota_cmd_is_stateless(uint8_t cmd)
  */
 static bool smota_state_has_active_session(smota_state_t state)
 {
-    return (state == SMOTA_STATE_HANDSHAKE ||
-            state == SMOTA_STATE_HEADER_INFO ||
+    return (state == SMOTA_STATE_STARTED ||
             state == SMOTA_STATE_TRANSFER ||
-            state == SMOTA_STATE_COMPLETE ||
-            state == SMOTA_STATE_INSTALL ||
-            state == SMOTA_STATE_ACTIVATE);
+            state == SMOTA_STATE_FINISHED);
+}
+
+/**
+ * @brief  检查命令 Payload 长度是否满足结构体读取要求
+ * @param  frame: 已解析帧
+ * @return true=有效, false=无效
+ */
+static bool smota_frame_payload_is_valid(const struct smota_frame *frame)
+{
+    const struct smota_data_req *data_req;
+
+    if (frame == NULL) {
+        return false;
+    }
+
+    switch (frame->header.cmd) {
+        case SMOTA_CMD_QUERY:
+            return (frame->header.length == sizeof(struct smota_query_req));
+
+        case SMOTA_CMD_START:
+            return (frame->header.length == sizeof(struct smota_start_req));
+
+        case SMOTA_CMD_DATA:
+            if (frame->header.length < sizeof(struct smota_data_req)) {
+                return false;
+            }
+            data_req = (const struct smota_data_req *)frame->payload;
+            return (frame->header.length ==
+                    (uint16_t)(sizeof(struct smota_data_req) + data_req->length));
+
+        case SMOTA_CMD_FINISH:
+            return (frame->header.length == sizeof(struct smota_finish_req));
+
+        default:
+            return true;
+    }
 }
 
 /**
@@ -136,35 +169,26 @@ static uint64_t smota_get_current_time_ms(const struct smota_system_driver *syst
 }
 
 /**
- * @brief  根据 boot driver 刷新 Boot 停留标志
- * @param  ctx: OTA 上下文
- * @param  boot: boot driver
- */
-static void smota_boot_update_stay_request(struct smota_ctx *ctx, const struct smota_boot_driver *boot)
-{
-    if (ctx == NULL ||
-        boot == NULL ||
-        boot->should_stay_in_boot == NULL) {
-        return;
-    }
-
-    if (boot->should_stay_in_boot() != 0) {
-        ctx->should_stay_in_boot = 1U;
-    }
-}
-
-/**
- * @brief  Boot 捕获窗口到期后尝试跳转 App
+ * @brief  执行 Boot 停留与 App 跳转决策
  * @param  ctx: OTA 上下文
  * @param  boot: boot driver
  * @param  current_time: 当前毫秒时间
  */
-static void smota_boot_try_jump_to_app(struct smota_ctx *ctx, const struct smota_boot_driver *boot, uint64_t current_time)
+static void smota_boot_poll_jump(struct smota_ctx *ctx, const struct smota_boot_driver *boot, uint64_t current_time)
 {
     if (ctx == NULL ||
-        boot == NULL ||
-        boot->jump_to_app == NULL ||
-        ctx->should_stay_in_boot != 0U) {
+        boot == NULL) {
+        return;
+    }
+
+    if (ctx->should_stay_in_boot == 0U &&
+        boot->should_stay_in_boot != NULL &&
+        boot->should_stay_in_boot() != 0) {
+        ctx->should_stay_in_boot = 1U;
+    }
+
+    if (ctx->should_stay_in_boot != 0U ||
+        boot->jump_to_app == NULL) {
         return;
     }
 
@@ -233,9 +257,10 @@ smota_err_t smota_init(void)
     ctx->reset_pending = 0;
     ctx->should_stay_in_boot = 0;
     ctx->sync_error_count = 0;
+    ctx->query_allowed = 0;
+    memset(ctx->target_project_id, 0, sizeof(ctx->target_project_id));
     memset(ctx->expected_hash, 0, sizeof(ctx->expected_hash));
-    memset(ctx->signature_r, 0, sizeof(ctx->signature_r));
-    memset(ctx->signature_s, 0, sizeof(ctx->signature_s));
+    ctx->verify_hash = 0;
     smota_load_current_firmware_info(ctx);
 
     /* 重置状态机 */
@@ -289,12 +314,10 @@ smota_err_t smota_poll(void)
     const struct smota_boot_driver *boot;
     smota_state_t state;
     struct smota_frame frame;
-    struct smota_handshake_resp handshake_resp = {0};
-    struct smota_header_info_resp header_resp = {0};
-    struct smota_data_block_resp data_resp = {0};
-    struct smota_transfer_complete_resp complete_resp = {0};
-    struct smota_install_resp install_resp = {0};
-    struct smota_query_version_resp query_version_resp = {0};
+    struct smota_query_resp query_resp = {0};
+    struct smota_start_resp start_resp = {0};
+    struct smota_data_resp data_resp = {0};
+    struct smota_finish_resp finish_resp = {0};
     uint8_t resp_buffer[256];
     int resp_len;
     int recv_len;
@@ -309,7 +332,6 @@ smota_err_t smota_poll(void)
     ctx = smota_ctx_get();
     system = (g_hal != NULL) ? g_hal->system : NULL;
     boot = (g_hal != NULL) ? g_hal->boot : NULL;
-    smota_boot_update_stay_request(ctx, boot);
 
     state = smota_state_get();
     if (state == SMOTA_STATE_ERROR) {
@@ -349,16 +371,29 @@ smota_err_t smota_poll(void)
                 ret = smota_frame_parse(g_rx_buffer, ctx->recv_len, &frame);
 
                 if (ret == SMOTA_ERR_OK) {
+                    if (!smota_frame_payload_is_valid(&frame)) {
+                        ret = SMOTA_ERR_LENGTH;
+                        g_last_error = ret;
+                        consumed = sizeof(struct smota_frame_header) + frame.header.length + sizeof(uint16_t);
+                        ctx->recv_len -= consumed;
+                        if (ctx->recv_len > 0) {
+                            memmove(g_rx_buffer,
+                                    g_rx_buffer + consumed,
+                                    ctx->recv_len);
+                        }
+                        continue;
+                    }
+
                     /* 处理命令 */
                     switch (frame.header.cmd) {
-                        case SMOTA_CMD_HANDSHAKE:
-                            ret = smota_handle_handshake_req(
-                                (struct smota_handshake_req *)frame.payload,
-                                &handshake_resp);
+                        case SMOTA_CMD_QUERY:
+                            ret = smota_handle_query_req(
+                                (struct smota_query_req *)frame.payload,
+                                &query_resp);
                             resp_len = smota_frame_build(
-                                SMOTA_CMD_HANDSHAKE_RESP,
-                                (uint8_t *)&handshake_resp,
-                                sizeof(handshake_resp),
+                                SMOTA_CMD_QUERY_RESP,
+                                (uint8_t *)&query_resp,
+                                sizeof(query_resp),
                                 resp_buffer,
                                 sizeof(resp_buffer));
                             if (resp_len > 0 && g_hal->comm->send != NULL) {
@@ -366,14 +401,14 @@ smota_err_t smota_poll(void)
                             }
                             break;
 
-                        case SMOTA_CMD_HEADER_INFO:
-                            ret = smota_handle_header_info_req(
-                                (struct smota_header_info_req *)frame.payload,
-                                &header_resp);
+                        case SMOTA_CMD_START:
+                            ret = smota_handle_start_req(
+                                (struct smota_start_req *)frame.payload,
+                                &start_resp);
                             resp_len = smota_frame_build(
-                                SMOTA_CMD_HEADER_INFO_RESP,
-                                (uint8_t *)&header_resp,
-                                sizeof(header_resp),
+                                SMOTA_CMD_START_RESP,
+                                (uint8_t *)&start_resp,
+                                sizeof(start_resp),
                                 resp_buffer,
                                 sizeof(resp_buffer));
                             if (resp_len > 0 && g_hal->comm->send != NULL) {
@@ -381,13 +416,13 @@ smota_err_t smota_poll(void)
                             }
                             break;
 
-                        case SMOTA_CMD_DATA_BLOCK:
-                            ret = smota_handle_data_block_req(
-                                (struct smota_data_block_req *)frame.payload,
-                                frame.payload + sizeof(struct smota_data_block_req),
+                        case SMOTA_CMD_DATA:
+                            ret = smota_handle_data_req(
+                                (struct smota_data_req *)frame.payload,
+                                frame.payload + sizeof(struct smota_data_req),
                                 &data_resp);
                             resp_len = smota_frame_build(
-                                SMOTA_CMD_DATA_BLOCK_RESP,
+                                SMOTA_CMD_DATA_RESP,
                                 (uint8_t *)&data_resp,
                                 sizeof(data_resp),
                                 resp_buffer,
@@ -397,29 +432,14 @@ smota_err_t smota_poll(void)
                             }
                             break;
 
-                        case SMOTA_CMD_DATA_COMPLETE:
-                            ret = smota_handle_transfer_complete_req(
-                                (struct smota_transfer_complete_req *)frame.payload,
-                                &complete_resp);
+                        case SMOTA_CMD_FINISH:
+                            ret = smota_handle_finish_req(
+                                (struct smota_finish_req *)frame.payload,
+                                &finish_resp);
                             resp_len = smota_frame_build(
-                                SMOTA_CMD_DATA_COMPLETE_RESP,
-                                (uint8_t *)&complete_resp,
-                                sizeof(complete_resp),
-                                resp_buffer,
-                                sizeof(resp_buffer));
-                            if (resp_len > 0 && g_hal->comm->send != NULL) {
-                                g_hal->comm->send(resp_buffer, resp_len);
-                            }
-                            break;
-
-                        case SMOTA_CMD_INSTALL:
-                            ret = smota_handle_install_req(
-                                (struct smota_install_req *)frame.payload,
-                                &install_resp);
-                            resp_len = smota_frame_build(
-                                SMOTA_CMD_INSTALL_RESP,
-                                (uint8_t *)&install_resp,
-                                sizeof(install_resp),
+                                SMOTA_CMD_FINISH_RESP,
+                                (uint8_t *)&finish_resp,
+                                sizeof(finish_resp),
                                 resp_buffer,
                                 sizeof(resp_buffer));
                             if (resp_len > 0 && g_hal->comm->send != NULL) {
@@ -431,21 +451,6 @@ smota_err_t smota_poll(void)
                                 system->system_reset != NULL) {
                                 ctx->reset_pending = 0;
                                 system->system_reset();
-                            }
-                            break;
-
-                        case SMOTA_CMD_QUERY_VERSION:
-                            ret = smota_handle_query_version_req(
-                                (struct smota_query_version_req *)frame.payload,
-                                &query_version_resp);
-                            resp_len = smota_frame_build(
-                                SMOTA_CMD_QUERY_VERSION_RESP,
-                                (uint8_t *)&query_version_resp,
-                                sizeof(query_version_resp),
-                                resp_buffer,
-                                sizeof(resp_buffer));
-                            if (resp_len > 0 && g_hal->comm->send != NULL) {
-                                g_hal->comm->send(resp_buffer, resp_len);
                             }
                             break;
 
@@ -536,9 +541,8 @@ smota_err_t smota_poll(void)
         }
     }
 
-    smota_boot_update_stay_request(ctx, boot);
     current_time = smota_get_current_time_ms(system);
-    smota_boot_try_jump_to_app(ctx, boot, current_time);
+    smota_boot_poll_jump(ctx, boot, current_time);
 
     return SMOTA_ERR_OK;
 }

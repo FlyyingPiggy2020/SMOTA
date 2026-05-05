@@ -63,11 +63,9 @@ int smota_hal_register(const struct smota_hal *hal)
         return -5;
     }
 
-    /* 单分区覆盖升级需要 Boot 策略保证失败后不误跳坏 App */
+    /* Boot 模式需要入口判断和 App 跳转策略 */
 #if SMOTA_MODE == 2
     if (hal->boot == NULL ||
-        hal->boot->set_state == NULL ||
-        hal->boot->get_state == NULL ||
         hal->boot->should_stay_in_boot == NULL ||
         hal->boot->jump_to_app == NULL) {
         SMOTA_DEBUG_PRINTF("Error: Boot driver is incomplete\r\n");

@@ -8,32 +8,26 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .protocol import (
-    QUERY_VERSION_REQ,
-    CMD_DATA_BLOCK,
-    CMD_DATA_BLOCK_RESP,
-    CMD_DATA_COMPLETE,
-    CMD_DATA_COMPLETE_RESP,
-    CMD_HANDSHAKE,
-    CMD_HANDSHAKE_RESP,
-    CMD_HEADER_INFO,
-    CMD_HEADER_INFO_RESP,
-    CMD_INSTALL,
-    CMD_INSTALL_RESP,
-    CMD_QUERY_VERSION,
-    CMD_QUERY_VERSION_RESP,
-    DATA_BLOCK_REQ,
-    DATA_BLOCK_RESP,
-    HANDSHAKE_REQ,
-    HEADER_INFO_REQ,
-    INSTALL_REQ,
-    INSTALL_RESP,
+    CMD_DATA,
+    CMD_DATA_RESP,
+    CMD_FINISH,
+    CMD_FINISH_RESP,
+    CMD_QUERY,
+    CMD_QUERY_RESP,
+    CMD_START,
+    CMD_START_RESP,
+    DATA_REQ,
+    DATA_RESP,
+    FINISH_REQ,
+    FINISH_RESP,
+    QUERY_FLAG_FORCE_UPGRADE,
+    QUERY_REQ,
+    START_FLAG_SHA256_VALID,
+    START_REQ,
     SmotaSerialClient,
     SmotaTcpClient,
-    TRANSFER_COMPLETE_REQ,
-    TRANSFER_COMPLETE_RESP,
-    compare_version,
-    decode_handshake,
-    decode_query_version,
+    decode_query,
+    decode_start,
     format_version,
     read_ota_package,
 )
@@ -43,8 +37,6 @@ LogFn = Callable[[str, str], None]
 ProgressFn = Callable[[int], None]
 StatusFn = Callable[[str], None]
 DeviceInfoFn = Callable[[tuple[int, int, int], str], None]
-BOOT_PROJECT_ID = "SMOTA_BOOT"
-EMPTY_BOOT_VERSION = (0, 0, 0)
 BOOT_CAPTURE_PROBE_TIMEOUT_S = 0.08
 BOOT_CAPTURE_PROBE_DELAY_S = 0.02
 
@@ -62,9 +54,7 @@ class UpgradeConfig:
     connect_timeout_s: float
     chunk_size: int
     block_timeout_ms: int
-    check_timeout_ms: int
     install_timeout_ms: int
-    total_timeout_ms: int
     force_install: bool
     activate_check: bool
 
@@ -124,76 +114,51 @@ class UpgradeSession:
 
         try:
             self.status("捕获Boot")
-            running_info = self._query_running_version_with_probe(
+            query_info = self._query_running_version_with_probe(
                 client,
                 self.config.connect_timeout_s,
+                target_version,
+                project_id,
             )
-            running_version = running_info.version
-            self.logger("INFO", f"当前运行版本={format_version(running_version)}")
-            self.logger("INFO", f"当前设备ID={running_info.project_id}")
+            self.logger("INFO", f"当前运行版本={format_version(query_info.version)}")
+            self.logger("INFO", f"当前设备ID={query_info.project_id}")
             if self.device_info is not None:
-                self.device_info(running_info.version, running_info.project_id)
+                self.device_info(query_info.version, query_info.project_id)
 
-            compare_result = compare_version(running_version, target_version)
-            if not self.config.force_install:
-                if compare_result == 0:
-                    self.logger("INFO", "当前版本与目标版本一致，跳过下载")
-                    self.status("已跳过")
-                    self.progress(100)
-                    return
-                if compare_result > 0:
-                    raise RuntimeError(
-                        "当前运行版本高于目标版本："
-                        f"{format_version(running_version)} > {format_version(target_version)}; "
-                        "如需继续请启用强制安装"
-                    )
-            else:
-                self.logger("INFO", "已启用强制安装，继续执行升级流程")
+            if query_info.error_code != 0 or not query_info.allow_upgrade:
+                raise RuntimeError(f"设备拒绝升级：0x{query_info.error_code:08X}")
+            self.logger("INFO", "设备允许升级，继续执行升级流程")
 
             firmware_hash = hashlib.sha256(firmware).digest()
             self.logger("INFO", f"固件文件={self.config.firmware_path}")
             self.logger("INFO", f"固件大小={len(firmware)} 字节")
             self.logger("INFO", f"sha256={firmware_hash.hex()}")
 
-            self.status("握手中")
-            handshake = self._handshake(
+            self.status("开始升级")
+            start = self._start_transfer(
                 client=client,
-                target_version=target_version,
                 firmware_size=len(firmware),
-                project_id=project_id,
-                running_version=running_version,
+                firmware_hash=firmware_hash,
             )
 
             self.logger(
                 "INFO",
-                "握手成功 "
-                f"最大包长={handshake.max_packet_size} "
-                f"可用 Flash={handshake.flash_free_size} "
-                f"起始偏移={handshake.next_offset}",
+                "设备已准备接收 "
+                f"最大payload={start.max_payload_size}",
             )
-
-            self.status("发送头信息")
-            header_frame = client.exchange(
-                CMD_HEADER_INFO,
-                CMD_HEADER_INFO_RESP,
-                HEADER_INFO_REQ.pack(firmware_hash, bytes(32), bytes(32)),
-            )
-            header_error = int.from_bytes(header_frame.payload[:4], "little")
-            if header_error != 0:
-                raise RuntimeError(f"头信息发送失败：0x{header_error:08X}")
 
             self.status("传输中")
-            payload_size = max(1, min(self.config.chunk_size, handshake.max_packet_size - DATA_BLOCK_REQ.size))
-            offset = handshake.next_offset
+            payload_size = max(1, min(self.config.chunk_size, start.max_payload_size - DATA_REQ.size))
+            offset = 0
             while offset < len(firmware):
                 self._ensure_not_stopped()
                 chunk = firmware[offset:offset + payload_size]
                 frame = client.exchange(
-                    CMD_DATA_BLOCK,
-                    CMD_DATA_BLOCK_RESP,
-                    DATA_BLOCK_REQ.pack(offset, len(chunk)) + chunk,
+                    CMD_DATA,
+                    CMD_DATA_RESP,
+                    DATA_REQ.pack(offset, len(chunk)) + chunk,
                 )
-                block_error, received_offset = DATA_BLOCK_RESP.unpack(frame.payload)
+                block_error, received_offset = DATA_RESP.unpack(frame.payload)
                 if block_error != 0:
                     raise RuntimeError(f"数据块发送失败，偏移 {offset}：0x{block_error:08X}")
                 if received_offset != offset + len(chunk):
@@ -206,25 +171,14 @@ class UpgradeSession:
 
             self.status("校验中")
             complete_frame = client.exchange(
-                CMD_DATA_COMPLETE,
-                CMD_DATA_COMPLETE_RESP,
-                TRANSFER_COMPLETE_REQ.pack(len(firmware)),
+                CMD_FINISH,
+                CMD_FINISH_RESP,
+                FINISH_REQ.pack(len(firmware)),
             )
-            complete_error = TRANSFER_COMPLETE_RESP.unpack(complete_frame.payload)[0]
+            complete_error, reset_delay_ms = FINISH_RESP.unpack(complete_frame.payload)
             if complete_error != 0:
                 raise RuntimeError(f"传输校验失败：0x{complete_error:08X}")
-            self.logger("INFO", "传输校验成功")
-
-            self.status("安装中")
-            install_frame = client.exchange(
-                CMD_INSTALL,
-                CMD_INSTALL_RESP,
-                INSTALL_REQ.pack(1 if self.config.force_install else 0, bytes(15)),
-            )
-            install_error, estimated_time_s = INSTALL_RESP.unpack(install_frame.payload)
-            if install_error != 0:
-                raise RuntimeError(f"安装请求失败：0x{install_error:08X}")
-            self.logger("INFO", f"设备已接受安装，预计重启时间 {estimated_time_s} 秒")
+            self.logger("INFO", f"传输校验成功，设备将在 {reset_delay_ms} ms 后复位")
             client.close()
 
             if not self.config.activate_check:
@@ -242,6 +196,8 @@ class UpgradeSession:
             activate = self._query_running_version_with_probe(
                 client,
                 self.config.install_timeout_ms / 1000.0 + 5.0,
+                target_version,
+                project_id,
             )
             if self.device_info is not None:
                 self.device_info(activate.version, activate.project_id)
@@ -277,7 +233,13 @@ class UpgradeSession:
             raise TimeoutError("连接超时")
         raise TimeoutError(f"连接超时：{last_error}") from last_error
 
-    def _query_running_version_with_probe(self, client: SmotaTcpClient | SmotaSerialClient, timeout_s: float):
+    def _query_running_version_with_probe(
+        self,
+        client: SmotaTcpClient | SmotaSerialClient,
+        timeout_s: float,
+        target_version: tuple[int, int, int],
+        project_id: bytes,
+    ):
         deadline = time.time() + timeout_s
         last_error: Exception | None = None
         original_timeout = client.timeout
@@ -286,7 +248,7 @@ class UpgradeSession:
 
         self.logger(
             "INFO",
-            "等待连接并持续发送 QUERY_VERSION 捕获 Boot，"
+            "等待连接并持续发送 QUERY 捕获 Boot，"
             f"最长 {timeout_s:.1f} 秒",
         )
         try:
@@ -306,7 +268,7 @@ class UpgradeSession:
                         continue
 
                 try:
-                    return self._query_running_version(client, verbose=False)
+                    return self._query_running_version(client, target_version, project_id, verbose=False)
                 except Exception as exc:
                     last_error = exc
                     if not isinstance(exc, TimeoutError):
@@ -321,64 +283,58 @@ class UpgradeSession:
             raise TimeoutError("读取版本超时")
         raise TimeoutError(f"读取版本超时：{last_error}") from last_error
 
-    def _query_running_version(self, client: SmotaTcpClient | SmotaSerialClient, verbose: bool = True):
+    def _query_running_version(
+        self,
+        client: SmotaTcpClient | SmotaSerialClient,
+        target_version: tuple[int, int, int],
+        project_id: bytes,
+        verbose: bool = True,
+    ):
         if verbose:
-            self.logger("INFO", "准备查询设备当前运行版本")
+            self.logger("INFO", "准备查询设备当前运行版本和升级许可")
         frame = client.exchange(
-            CMD_QUERY_VERSION,
-            CMD_QUERY_VERSION_RESP,
-            QUERY_VERSION_REQ.pack(0),
-        )
-        response = decode_query_version(frame.payload)
-        if response.error_code != 0:
-            raise RuntimeError(f"读取版本失败：0x{response.error_code:08X}")
-        return response
-
-    def _handshake(
-        self,
-        client: SmotaTcpClient | SmotaSerialClient,
-        target_version: tuple[int, int, int],
-        firmware_size: int,
-        project_id: bytes,
-        running_version: tuple[int, int, int],
-    ):
-        if running_version == EMPTY_BOOT_VERSION:
-            self.logger("INFO", "检测到空 Boot，使用 SMOTA_BOOT 兼容握手")
-            boot_project_id = BOOT_PROJECT_ID.encode("utf-8")[:16].ljust(16, b"\x00")
-            handshake = self._send_handshake(client, target_version, firmware_size, boot_project_id)
-            if handshake.error_code != 0:
-                raise RuntimeError(f"握手失败：0x{handshake.error_code:08X}")
-            return handshake
-
-        handshake = self._send_handshake(client, target_version, firmware_size, project_id)
-        if handshake.error_code == 0:
-            return handshake
-
-        raise RuntimeError(f"握手失败：0x{handshake.error_code:08X}")
-
-    def _send_handshake(
-        self,
-        client: SmotaTcpClient | SmotaSerialClient,
-        target_version: tuple[int, int, int],
-        firmware_size: int,
-        project_id: bytes,
-    ):
-        handshake_frame = client.exchange(
-            CMD_HANDSHAKE,
-            CMD_HANDSHAKE_RESP,
-            HANDSHAKE_REQ.pack(
+            CMD_QUERY,
+            CMD_QUERY_RESP,
+            QUERY_REQ.pack(
                 target_version[0],
                 target_version[1],
                 target_version[2],
-                firmware_size,
+                QUERY_FLAG_FORCE_UPGRADE if self.config.force_install else 0,
                 project_id,
-                self.config.block_timeout_ms,
-                self.config.check_timeout_ms,
-                self.config.install_timeout_ms,
-                self.config.total_timeout_ms,
             ),
         )
-        return decode_handshake(handshake_frame.payload)
+        response = decode_query(frame.payload)
+        return response
+
+    def _start_transfer(
+        self,
+        client: SmotaTcpClient | SmotaSerialClient,
+        firmware_size: int,
+        firmware_hash: bytes,
+    ):
+        start = self._send_start(client, firmware_size, firmware_hash)
+        if start.error_code == 0:
+            return start
+
+        raise RuntimeError(f"START 失败：0x{start.error_code:08X}")
+
+    def _send_start(
+        self,
+        client: SmotaTcpClient | SmotaSerialClient,
+        firmware_size: int,
+        firmware_hash: bytes,
+    ):
+        start_frame = client.exchange(
+            CMD_START,
+            CMD_START_RESP,
+            START_REQ.pack(
+                START_FLAG_SHA256_VALID,
+                firmware_size,
+                firmware_hash,
+                self.config.block_timeout_ms,
+            ),
+        )
+        return decode_start(start_frame.payload)
 
     def _ensure_not_stopped(self) -> None:
         if self._stop_event.is_set():

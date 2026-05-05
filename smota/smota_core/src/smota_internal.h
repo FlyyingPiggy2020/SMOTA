@@ -31,10 +31,11 @@ struct smota_ctx {
     uint32_t firmware_size;                  /*!< 固件总大小（字节） */
     uint32_t received_size;                  /*!< 已接收数据大小（字节） */
     uint8_t firmware_version[4];             /*!< 待升级固件版本号 */
+    uint8_t target_project_id[16];           /*!< 待升级固件项目 ID */
     struct smota_firmware_info current_info; /*!< 当前运行固件身份 */
     uint8_t expected_hash[32];               /*!< 固件期望 SHA-256 */
-    uint8_t signature_r[32];                 /*!< ECDSA 签名 r 分量 */
-    uint8_t signature_s[32];                 /*!< ECDSA 签名 s 分量 */
+    uint8_t verify_hash;                     /*!< 是否需要校验 SHA-256 */
+    uint8_t query_allowed;                   /*!< QUERY 是否已允许本次升级 */
     uint32_t timeout_ms;                     /*!< 通信超时时间（毫秒） */
     uint32_t recv_len;                       /*!< 已接收数据长度 */
     uint32_t last_packet_time;               /*!< 最后接收数据包的时间戳 */

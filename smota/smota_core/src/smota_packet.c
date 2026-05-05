@@ -172,9 +172,6 @@ int smota_frame_build(uint8_t cmd, const uint8_t *payload, uint16_t payload_len,
     header->sof[2] = 'O';
     header->sof[3] = 'T';
     header->sof[4] = 'A';
-    header->ver = SMOTA_PROTOCOL_VER;
-    header->frag = 0;
-    header->seq = 0; /* TODO: 实现序号管理 */
     header->cmd = cmd;
     header->length = payload_len;
 

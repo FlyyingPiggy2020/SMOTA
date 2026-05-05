@@ -20,74 +20,60 @@ except ImportError:  # pragma: no cover - optional dependency
 LogFn = Callable[[str, str], None]
 
 SOF = b"smOTA"
-FRAME_HEADER = struct.Struct("<5sBBBBH")
+FRAME_HEADER = struct.Struct("<5sBH")
 CRC16 = struct.Struct("<H")
 NO_RESPONSE_RETRY_COUNT = 3
 
-CMD_HANDSHAKE = 0x01
-CMD_HEADER_INFO = 0x02
-CMD_DATA_BLOCK = 0x03
-CMD_DATA_COMPLETE = 0x04
-CMD_INSTALL = 0x05
-CMD_QUERY_VERSION = 0x07
+CMD_QUERY = 0x01
+CMD_START = 0x02
+CMD_DATA = 0x03
+CMD_FINISH = 0x04
 
-CMD_HANDSHAKE_RESP = 0x81
-CMD_HEADER_INFO_RESP = 0x82
-CMD_DATA_BLOCK_RESP = 0x83
-CMD_DATA_COMPLETE_RESP = 0x84
-CMD_INSTALL_RESP = 0x85
-CMD_QUERY_VERSION_RESP = 0x87
+CMD_QUERY_RESP = 0x81
+CMD_START_RESP = 0x82
+CMD_DATA_RESP = 0x83
+CMD_FINISH_RESP = 0x84
 
-HANDSHAKE_REQ = struct.Struct("<BBBI16sHHHI")
-HANDSHAKE_RESP = struct.Struct("<IIHHIHHB")
-HEADER_INFO_REQ = struct.Struct("<32s32s32s")
-DATA_BLOCK_REQ = struct.Struct("<IH")
-DATA_BLOCK_RESP = struct.Struct("<II")
-TRANSFER_COMPLETE_REQ = struct.Struct("<I")
-TRANSFER_COMPLETE_RESP = struct.Struct("<I")
-INSTALL_REQ = struct.Struct("<B15s")
-INSTALL_RESP = struct.Struct("<IH")
-QUERY_VERSION_REQ = struct.Struct("<I")
-QUERY_VERSION_RESP = struct.Struct("<IBBB16s")
+QUERY_REQ = struct.Struct("<BBBB16s")
+QUERY_RESP = struct.Struct("<IBBBB16s")
+START_REQ = struct.Struct("<BI32sH")
+START_RESP = struct.Struct("<IH")
+DATA_REQ = struct.Struct("<IH")
+DATA_RESP = struct.Struct("<II")
+FINISH_REQ = struct.Struct("<I")
+FINISH_RESP = struct.Struct("<IH")
+
+QUERY_FLAG_FORCE_UPGRADE = 0x01
+START_FLAG_SHA256_VALID = 0x01
 
 CMD_NAMES = {
-    CMD_HANDSHAKE: "HANDSHAKE",
-    CMD_HEADER_INFO: "HEADER_INFO",
-    CMD_DATA_BLOCK: "DATA_BLOCK",
-    CMD_DATA_COMPLETE: "DATA_COMPLETE",
-    CMD_INSTALL: "INSTALL",
-    CMD_QUERY_VERSION: "QUERY_VERSION",
-    CMD_HANDSHAKE_RESP: "HANDSHAKE_RESP",
-    CMD_HEADER_INFO_RESP: "HEADER_INFO_RESP",
-    CMD_DATA_BLOCK_RESP: "DATA_BLOCK_RESP",
-    CMD_DATA_COMPLETE_RESP: "DATA_COMPLETE_RESP",
-    CMD_INSTALL_RESP: "INSTALL_RESP",
-    CMD_QUERY_VERSION_RESP: "QUERY_VERSION_RESP",
+    CMD_QUERY: "QUERY",
+    CMD_START: "START",
+    CMD_DATA: "DATA",
+    CMD_FINISH: "FINISH",
+    CMD_QUERY_RESP: "QUERY_RESP",
+    CMD_START_RESP: "START_RESP",
+    CMD_DATA_RESP: "DATA_RESP",
+    CMD_FINISH_RESP: "FINISH_RESP",
 }
 
 
 @dataclass(frozen=True)
 class Frame:
     cmd: int
-    seq: int
     payload: bytes
 
 
 @dataclass(frozen=True)
-class HandshakeResponse:
+class StartResponse:
     error_code: int
-    next_offset: int
-    max_packet_size: int
-    mtu_size: int
-    flash_free_size: int
-    block_timeout: int
-    install_timeout: int
-    capabilities: int
+    max_payload_size: int
 
 
 @dataclass(frozen=True)
 class QueryVersionResponse:
     error_code: int
+    allow_upgrade: bool
     version: tuple[int, int, int]
     project_id: str
 
@@ -129,14 +115,6 @@ def parse_version(text: str) -> tuple[int, int, int]:
 
 def format_version(version: tuple[int, int, int]) -> str:
     return f"{version[0]}.{version[1]}.{version[2]}"
-
-
-def compare_version(left: tuple[int, int, int], right: tuple[int, int, int]) -> int:
-    if left > right:
-        return 1
-    if left < right:
-        return -1
-    return 0
 
 
 def crc16_ccitt(data: bytes) -> int:
@@ -345,14 +323,19 @@ def _load_hex_firmware_from_text(text: str) -> bytes:
     return bytes(firmware)
 
 
-def decode_handshake(payload: bytes) -> HandshakeResponse:
-    return HandshakeResponse(*HANDSHAKE_RESP.unpack(payload))
+def decode_start(payload: bytes) -> StartResponse:
+    return StartResponse(*START_RESP.unpack(payload))
 
 
-def decode_query_version(payload: bytes) -> QueryVersionResponse:
-    error_code, major, minor, patch, project_id_raw = QUERY_VERSION_RESP.unpack(payload)
+def decode_query(payload: bytes) -> QueryVersionResponse:
+    error_code, allow_upgrade, major, minor, patch, project_id_raw = QUERY_RESP.unpack(payload)
     project_id = project_id_raw.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
-    return QueryVersionResponse(error_code=error_code, version=(major, minor, patch), project_id=project_id)
+    return QueryVersionResponse(
+        error_code=error_code,
+        allow_upgrade=bool(allow_upgrade),
+        version=(major, minor, patch),
+        project_id=project_id,
+    )
 
 
 class SmotaTcpClient:
@@ -361,7 +344,6 @@ class SmotaTcpClient:
         self.port = port
         self.timeout = timeout
         self.logger = logger
-        self.seq = 0
         self.sock: socket.socket | None = None
 
     def connect(self) -> None:
@@ -381,11 +363,10 @@ class SmotaTcpClient:
             self._log("INFO", "connection closed")
 
     def exchange(self, cmd: int, expected_cmd: int, payload: bytes = b"") -> Frame:
-        seq = self.seq & 0xFF
-        frame = self._build_frame(seq, cmd, payload)
+        frame = self._build_frame(cmd, payload)
 
         for attempt in range(NO_RESPONSE_RETRY_COUNT + 1):
-            self._send_raw_frame(frame, cmd, seq, len(payload))
+            self._send_raw_frame(frame, cmd, len(payload))
             try:
                 response = self.recv_frame()
             except (TimeoutError, socket.timeout) as exc:
@@ -405,7 +386,6 @@ class SmotaTcpClient:
                     f"expected {cmd_name(expected_cmd)}"
                 )
 
-            self.seq = (self.seq + 1) & 0xFF
             return response
 
         raise RuntimeError(f"{cmd_name(cmd)} exchange failed")
@@ -414,17 +394,15 @@ class SmotaTcpClient:
         if self.sock is None:
             raise RuntimeError("socket is not connected")
 
-        seq = self.seq & 0xFF
-        frame = self._build_frame(seq, cmd, payload)
-        self._send_raw_frame(frame, cmd, seq, len(payload))
-        self.seq = (self.seq + 1) & 0xFF
+        frame = self._build_frame(cmd, payload)
+        self._send_raw_frame(frame, cmd, len(payload))
 
     def recv_frame(self) -> Frame:
         if self.sock is None:
             raise RuntimeError("socket is not connected")
 
         header = self._recv_exact(FRAME_HEADER.size)
-        sof, _ver, _frag, seq, cmd, payload_len = FRAME_HEADER.unpack(header)
+        sof, cmd, payload_len = FRAME_HEADER.unpack(header)
         if sof != SOF:
             raise RuntimeError(f"invalid SOF: {sof!r}")
 
@@ -437,9 +415,9 @@ class SmotaTcpClient:
         frame = header + payload + CRC16.pack(frame_crc)
         self._log(
             "RX",
-            f"{cmd_name(cmd)} seq={seq} len={len(payload)} frame={frame_hex(frame)}",
+            f"{cmd_name(cmd)} len={len(payload)} frame={frame_hex(frame)}",
         )
-        return Frame(cmd=cmd, seq=seq, payload=payload)
+        return Frame(cmd=cmd, payload=payload)
 
     def _recv_exact(self, size: int) -> bytes:
         if self.sock is None:
@@ -453,18 +431,18 @@ class SmotaTcpClient:
             data.extend(chunk)
         return bytes(data)
 
-    def _build_frame(self, seq: int, cmd: int, payload: bytes) -> bytes:
-        header = FRAME_HEADER.pack(SOF, 0x00, 0x00, seq, cmd, len(payload))
+    def _build_frame(self, cmd: int, payload: bytes) -> bytes:
+        header = FRAME_HEADER.pack(SOF, cmd, len(payload))
         return header + payload + CRC16.pack(crc16_ccitt(header + payload))
 
-    def _send_raw_frame(self, frame: bytes, cmd: int, seq: int, payload_len: int) -> None:
+    def _send_raw_frame(self, frame: bytes, cmd: int, payload_len: int) -> None:
         if self.sock is None:
             raise RuntimeError("socket is not connected")
 
         self.sock.sendall(frame)
         self._log(
             "TX",
-            f"{cmd_name(cmd)} seq={seq} len={payload_len} frame={frame_hex(frame)}",
+            f"{cmd_name(cmd)} len={payload_len} frame={frame_hex(frame)}",
         )
 
     def _log(self, level: str, message: str) -> None:
@@ -486,7 +464,6 @@ class SmotaSerialClient:
         self.baudrate = baudrate
         self.timeout = timeout
         self.logger = logger
-        self.seq = 0
         self.ser: serial.Serial | None = serial_connection
         self.external_serial = serial_connection
         self.close_on_close = close_on_close
@@ -539,11 +516,10 @@ class SmotaSerialClient:
                 self.ser = None
 
     def exchange(self, cmd: int, expected_cmd: int, payload: bytes = b"") -> Frame:
-        seq = self.seq & 0xFF
-        frame = self._build_frame(seq, cmd, payload)
+        frame = self._build_frame(cmd, payload)
 
         for attempt in range(NO_RESPONSE_RETRY_COUNT + 1):
-            self._send_raw_frame(frame, cmd, seq, len(payload))
+            self._send_raw_frame(frame, cmd, len(payload))
             try:
                 response = self.recv_frame()
             except TimeoutError as exc:
@@ -563,7 +539,6 @@ class SmotaSerialClient:
                     f"expected {cmd_name(expected_cmd)}"
                 )
 
-            self.seq = (self.seq + 1) & 0xFF
             return response
 
         raise RuntimeError(f"{cmd_name(cmd)} exchange failed")
@@ -572,14 +547,12 @@ class SmotaSerialClient:
         if self.ser is None:
             raise RuntimeError("serial is not connected")
 
-        seq = self.seq & 0xFF
-        frame = self._build_frame(seq, cmd, payload)
-        self._send_raw_frame(frame, cmd, seq, len(payload))
-        self.seq = (self.seq + 1) & 0xFF
+        frame = self._build_frame(cmd, payload)
+        self._send_raw_frame(frame, cmd, len(payload))
 
     def recv_frame(self) -> Frame:
         header = self._read_exact(FRAME_HEADER.size)
-        sof, _ver, _frag, seq, cmd, payload_len = FRAME_HEADER.unpack(header)
+        sof, cmd, payload_len = FRAME_HEADER.unpack(header)
         if sof != SOF:
             raise RuntimeError(f"invalid SOF: {sof!r}")
 
@@ -592,9 +565,9 @@ class SmotaSerialClient:
         frame = header + payload + CRC16.pack(frame_crc)
         self._log(
             "RX",
-            f"{cmd_name(cmd)} seq={seq} len={len(payload)} frame={frame_hex(frame)}",
+            f"{cmd_name(cmd)} len={len(payload)} frame={frame_hex(frame)}",
         )
-        return Frame(cmd=cmd, seq=seq, payload=payload)
+        return Frame(cmd=cmd, payload=payload)
 
     def _read_exact(self, size: int) -> bytes:
         if self.ser is None:
@@ -608,11 +581,11 @@ class SmotaSerialClient:
             data.extend(chunk)
         return bytes(data)
 
-    def _build_frame(self, seq: int, cmd: int, payload: bytes) -> bytes:
-        header = FRAME_HEADER.pack(SOF, 0x00, 0x00, seq, cmd, len(payload))
+    def _build_frame(self, cmd: int, payload: bytes) -> bytes:
+        header = FRAME_HEADER.pack(SOF, cmd, len(payload))
         return header + payload + CRC16.pack(crc16_ccitt(header + payload))
 
-    def _send_raw_frame(self, frame: bytes, cmd: int, seq: int, payload_len: int) -> None:
+    def _send_raw_frame(self, frame: bytes, cmd: int, payload_len: int) -> None:
         if self.ser is None:
             raise RuntimeError("serial is not connected")
 
@@ -620,7 +593,7 @@ class SmotaSerialClient:
         self.ser.flush()
         self._log(
             "TX",
-            f"{cmd_name(cmd)} seq={seq} len={payload_len} frame={frame_hex(frame)}",
+            f"{cmd_name(cmd)} len={payload_len} frame={frame_hex(frame)}",
         )
 
     def _log(self, level: str, message: str) -> None:

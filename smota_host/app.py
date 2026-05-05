@@ -37,9 +37,7 @@ class HostApp:
         self.timeout_s = tk.StringVar(value="3.0")
         self.connect_timeout_s = tk.StringVar(value="8.0")
         self.block_timeout_ms = tk.StringVar(value="5000")
-        self.check_timeout_ms = tk.StringVar(value="30000")
         self.install_timeout_ms = tk.StringVar(value="15000")
-        self.total_timeout_ms = tk.StringVar(value="60000")
         self.force_install = tk.BooleanVar(value=False)
         self.activate_check = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="空闲")
@@ -100,11 +98,9 @@ class HostApp:
         self._add_entry(common_frame, "通信超时(s)", self.timeout_s, 2, 0)
         self._add_entry(common_frame, "连接/捕获(s)", self.connect_timeout_s, 2, 2)
         self._add_entry(common_frame, "分块超时(ms)", self.block_timeout_ms, 2, 4)
-        self._add_entry(common_frame, "校验超时(ms)", self.check_timeout_ms, 3, 0)
-        self._add_entry(common_frame, "安装超时(ms)", self.install_timeout_ms, 3, 2)
-        self._add_entry(common_frame, "总超时(ms)", self.total_timeout_ms, 3, 4)
+        self._add_entry(common_frame, "重连超时(ms)", self.install_timeout_ms, 3, 0)
 
-        ttk.Checkbutton(common_frame, text="强制安装", variable=self.force_install).grid(
+        ttk.Checkbutton(common_frame, text="强制升级", variable=self.force_install).grid(
             row=4, column=0, padx=8, pady=8, sticky="w"
         )
         ttk.Checkbutton(common_frame, text="激活校验", variable=self.activate_check).grid(
@@ -343,9 +339,7 @@ class HostApp:
                 connect_timeout_s=float(self.connect_timeout_s.get()),
                 chunk_size=int(self.chunk_size.get()),
                 block_timeout_ms=int(self.block_timeout_ms.get()),
-                check_timeout_ms=int(self.check_timeout_ms.get()),
                 install_timeout_ms=int(self.install_timeout_ms.get()),
-                total_timeout_ms=int(self.total_timeout_ms.get()),
                 force_install=self.force_install.get(),
                 activate_check=self.activate_check.get(),
             )
