@@ -176,15 +176,21 @@ static uint64_t smota_get_current_time_ms(const struct smota_system_driver *syst
  */
 static void smota_boot_poll_jump(struct smota_ctx *ctx, const struct smota_boot_driver *boot, uint64_t current_time)
 {
+    int boot_request;
+
     if (ctx == NULL ||
         boot == NULL) {
         return;
     }
 
     if (ctx->should_stay_in_boot == 0U &&
-        boot->should_stay_in_boot != NULL &&
-        boot->should_stay_in_boot() != 0) {
-        ctx->should_stay_in_boot = 1U;
+        boot->should_stay_in_boot != NULL) {
+        boot_request = boot->should_stay_in_boot();
+        if (boot_request == 1) {
+            ctx->should_stay_in_boot = 1U;
+        } else if (boot_request == 2) {
+            ctx->boot_window_start_time = current_time - SMOTA_BOOT_CAPTURE_WINDOW_MS;
+        }
     }
 
     if (ctx->should_stay_in_boot != 0U ||
@@ -656,20 +662,6 @@ void smota_get_target_version(uint8_t version[4])
 
     ctx = smota_ctx_get();
     memcpy(version, ctx->firmware_version, sizeof(ctx->firmware_version));
-}
-
-bool smota_should_stay_in_boot(void)
-{
-    struct smota_ctx *ctx = smota_ctx_get();
-
-    return (ctx->should_stay_in_boot != 0U) ? true : false;
-}
-
-void smota_set_stay_in_boot(bool stay)
-{
-    struct smota_ctx *ctx = smota_ctx_get();
-
-    ctx->should_stay_in_boot = (stay == true) ? 1U : 0U;
 }
 
 /*---------- end of file ----------*/

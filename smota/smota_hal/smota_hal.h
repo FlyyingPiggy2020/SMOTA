@@ -241,7 +241,7 @@ struct smota_identity_driver {
 struct smota_boot_driver {
     /**
      * @brief  判断是否应停留在 Boot
-     * @return 1=停留在 Boot, 0=允许进入 App 捕获窗口
+     * @return 0=进入捕获窗口, 1=停留 Boot, 2=跳过捕获窗口直接尝试进入 App
      */
     int (*should_stay_in_boot)(void);
 

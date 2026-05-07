@@ -134,18 +134,6 @@ void smota_get_current_firmware_info(struct smota_firmware_info *info);
  */
 void smota_get_target_version(uint8_t version[4]);
 
-/**
- * @brief       判断 smOTA 是否要求停留在 Boot
- * @return      bool true=停留在 Boot, false=可继续启动策略
- */
-bool smota_should_stay_in_boot(void);
-
-/**
- * @brief       设置 smOTA Boot 停留标志
- * @param[in]   stay true=停留在 Boot, false=清除停留标志
- */
-void smota_set_stay_in_boot(bool stay);
-
 #ifdef __cplusplus
 }
 #endif
